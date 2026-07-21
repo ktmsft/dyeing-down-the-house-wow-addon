@@ -1,0 +1,263 @@
+local ADDON, ns = ...
+
+--------------------------------------------------------------------------------
+-- Options.lua — the settings panel ("/dye options" or Interface > AddOns).
+--
+-- A custom canvas panel: column-visibility toggles and display options in tidy
+-- columns, plus two collapsible checklists (Dyes and Flowers) where everything is
+-- on by default and the player unchecks what they don't want to see. Built once
+-- at login, wrapped so a Settings-API change can never take the addon down.
+--------------------------------------------------------------------------------
+
+local category, panel, panelTitle
+local checks = {} -- { {cb, get}, ... } refreshed whenever the panel is shown
+
+local function RefreshChecks()
+	for _, c in ipairs(checks) do c.cb:SetChecked(c.get()) end
+end
+
+local function ApplyPanelTitle()
+	if not panelTitle then return end
+	if DyingDownTheHouseDB.ui.rainbowTitle then
+		panelTitle:SetText(ns.RainbowText("Dyeing Down The House"))
+	else
+		panelTitle:SetText("Dyeing Down The House")
+		if ns.ACCENT then panelTitle:SetTextColor(ns.ACCENT[1], ns.ACCENT[2], ns.ACCENT[3]) end
+	end
+end
+
+local function MakeCheck(parent, label, get, set)
+	local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+	cb:SetSize(24, 24)
+	local fs = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	fs:SetPoint("LEFT", cb, "RIGHT", 2, 0)
+	fs:SetText(label)
+	cb:SetScript("OnClick", function(self) set(self:GetChecked() and true or false) end)
+	checks[#checks + 1] = { cb = cb, get = get }
+	return cb
+end
+
+local function SectionHeader(parent, text)
+	local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	fs:SetText(text)
+	return fs
+end
+
+-- One checklist (all items on by default; uncheck to hide). Returns the container
+-- frame and its pixel height. `swatchColor` optional (dye colours).
+local function BuildChecklist(content, items, isHidden, setHidden, setAll, swatchColor)
+	local c = CreateFrame("Frame", nil, content)
+
+	local allBtn = CreateFrame("Button", nil, c, "UIPanelButtonTemplate")
+	allBtn:SetSize(90, 20)
+	allBtn:SetPoint("TOPLEFT", 16, -2)
+	allBtn:SetText("Check All")
+	allBtn:SetScript("OnClick", function() setAll(false); RefreshChecks() end)
+	local noneBtn = CreateFrame("Button", nil, c, "UIPanelButtonTemplate")
+	noneBtn:SetSize(90, 20)
+	noneBtn:SetPoint("LEFT", allBtn, "RIGHT", 8, 0)
+	noneBtn:SetText("Uncheck All")
+	noneBtn:SetScript("OnClick", function() setAll(true); RefreshChecks() end)
+
+	local COLS, COLW, ROWH, TOP = 3, 188, 22, -28
+	for i, it in ipairs(items) do
+		local col = (i - 1) % COLS
+		local rowIdx = math.floor((i - 1) / COLS)
+		local cb = CreateFrame("CheckButton", nil, c, "UICheckButtonTemplate")
+		cb:SetSize(22, 22)
+		cb:SetPoint("TOPLEFT", 16 + col * COLW, TOP - rowIdx * ROWH)
+
+		local anchor, gap = cb, 2
+		if swatchColor then
+			local sw = cb:CreateTexture(nil, "OVERLAY")
+			sw:SetSize(9, 9)
+			sw:SetPoint("LEFT", cb, "RIGHT", 1, 0)
+			local col3 = swatchColor(it) or { 0.6, 0.6, 0.6 }
+			sw:SetColorTexture(col3[1], col3[2], col3[3])
+			anchor, gap = sw, 3
+		end
+		local fs = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		fs:SetPoint("LEFT", anchor, "RIGHT", gap, 0)
+		fs:SetWidth(COLW - 34)
+		fs:SetJustifyH("LEFT")
+		fs:SetWordWrap(false)
+		fs:SetText(it.label)
+
+		cb:SetScript("OnClick", function(self) setHidden(it, not self:GetChecked()) end)
+		checks[#checks + 1] = { cb = cb, get = function() return not isHidden(it) end }
+	end
+
+	local rows = math.ceil(#items / COLS)
+	local h = 28 + rows * ROWH + 6
+	c:SetSize(560, h)
+	return c, h
+end
+
+local function BuildPanel()
+	if panel then return end
+	if type(Settings) ~= "table"
+		or not (Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory) then
+		return
+	end
+
+	panel = CreateFrame("Frame")
+	panel:Hide()
+
+	local scroll = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
+	scroll:SetPoint("TOPLEFT", 10, -10)
+	scroll:SetPoint("BOTTOMRIGHT", -28, 10)
+	local content = CreateFrame("Frame", nil, scroll)
+	content:SetSize(580, 100)
+	scroll:SetScrollChild(content)
+
+	local COL2 = 285
+	local y = -8
+
+	panelTitle = content:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+	panelTitle:SetPoint("TOPLEFT", 8, y)
+	ApplyPanelTitle()
+	y = y - 34
+
+	local subtitle = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	subtitle:SetPoint("TOPLEFT", 10, y)
+	subtitle:SetText("Tracks the housing dyes you still need, and the cheapest way to get them, craft or buy.")
+	subtitle:SetTextColor(0.7, 0.7, 0.7)
+	y = y - 24
+
+	-- Columns to show -------------------------------------------------------
+	SectionHeader(content, "Columns to show"):SetPoint("TOPLEFT", 8, y)
+	y = y - 24
+	local colDefs = {
+		{ "pigment", "Pigments — owned & craftable" },
+		{ "flowers", "Flowers — owned & craftable" },
+		{ "value",   "Dye value (AH price)" },
+		{ "goal",    "Dye needed (goal)" },
+	}
+	for i, cd in ipairs(colDefs) do
+		local key = cd[1]
+		local cb = MakeCheck(content, cd[2],
+			function() return DyingDownTheHouseDB.ui.cols[key] ~= false end,
+			function(v)
+				DyingDownTheHouseDB.ui.cols[key] = v
+				if ns.ApplyColumnLayout then ns.ApplyColumnLayout() end
+				ns.Refresh()
+			end)
+		cb:SetPoint("TOPLEFT", 16 + ((i - 1) % 2) * COL2, y - math.floor((i - 1) / 2) * 26)
+	end
+	y = y - 26 * 2 - 12
+
+	-- Display ---------------------------------------------------------------
+	SectionHeader(content, "Display"):SetPoint("TOPLEFT", 8, y)
+	y = y - 24
+	MakeCheck(content, "Hide cost-prohibitive flowers",
+		function() return DyingDownTheHouseDB.ui.hideCostlyFlowers end,
+		function(v) DyingDownTheHouseDB.ui.hideCostlyFlowers = v; ns.Refresh() end)
+		:SetPoint("TOPLEFT", 16, y)
+	MakeCheck(content, "Lock the window in place",
+		function() return DyingDownTheHouseDB.ui.locked end,
+		function(v) DyingDownTheHouseDB.ui.locked = v end)
+		:SetPoint("TOPLEFT", 16 + COL2, y)
+	y = y - 26
+	MakeCheck(content, "Track dyes needed in housing panel",
+		function() return DyingDownTheHouseDB.ui.housingGoalInput end,
+		function(v) DyingDownTheHouseDB.ui.housingGoalInput = v end)
+		:SetPoint("TOPLEFT", 16, y)
+	MakeCheck(content, "Mark cost-worthy herbs when crafting",
+		function() return DyingDownTheHouseDB.ui.markHerbs end,
+		function(v) DyingDownTheHouseDB.ui.markHerbs = v; if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end end)
+		:SetPoint("TOPLEFT", 16 + COL2, y)
+	y = y - 26
+	MakeCheck(content, "Rainbow title  (off = plain)",
+		function() return DyingDownTheHouseDB.ui.rainbowTitle end,
+		function(v)
+			DyingDownTheHouseDB.ui.rainbowTitle = v
+			ApplyPanelTitle()
+			if ns.ApplyTitleColor then ns.ApplyTitleColor() end
+		end)
+		:SetPoint("TOPLEFT", 16, y)
+	y = y - 36
+
+	-- Two collapsible checklists (Dyes, Flowers) ----------------------------
+	local dyeItems = {}
+	do
+		local colIndex = {}
+		for i, cc in ipairs(ns.COLORS or {}) do colIndex[cc] = i end
+		for _, d in ipairs(ns.DYES) do
+			dyeItems[#dyeItems + 1] = { label = (d.name:gsub(" Dye$", "")), key = d.key, color = d.color }
+		end
+		table.sort(dyeItems, function(a, b)
+			if a.color ~= b.color then return (colIndex[a.color] or 99) < (colIndex[b.color] or 99) end
+			return a.label < b.label
+		end)
+	end
+	local dyeContainer = BuildChecklist(content, dyeItems,
+		function(it) return ns.IsDyeHidden(it.key) end,
+		function(it, hidden) ns.SetDyeHidden(it.key, hidden) end,
+		ns.SetAllDyesHidden,
+		function(it) return ns.SWATCH and ns.SWATCH[it.color] end)
+
+	local herbItems = {}
+	for _, name in ipairs(ns.GetDistinctHerbNames()) do
+		herbItems[#herbItems + 1] = { label = name, name = name }
+	end
+	local herbContainer = BuildChecklist(content, herbItems,
+		function(it) return ns.IsHerbHidden(it.name) end,
+		function(it, hidden) ns.SetHerbHidden(it.name, hidden) end,
+		ns.SetAllHerbsHidden)
+
+	local sections = {
+		{ label = ("Dyes to show   (%d) — uncheck to hide"):format(#dyeItems),
+			container = dyeContainer, open = false },
+		{ label = ("Flowers to show   (%d) — uncheck to hide"):format(#herbItems),
+			container = herbContainer, open = false },
+	}
+	local startY = y
+
+	local function Relayout()
+		local yy = startY
+		for _, s in ipairs(sections) do
+			s.header.fs:SetText((s.open and "−  " or "+  ") .. s.label)
+			s.header:ClearAllPoints()
+			s.header:SetPoint("TOPLEFT", 8, yy)
+			yy = yy - 26
+			if s.open then
+				s.container:ClearAllPoints()
+				s.container:SetPoint("TOPLEFT", 0, yy)
+				s.container:Show()
+				yy = yy - s.container:GetHeight()
+			else
+				s.container:Hide()
+			end
+			yy = yy - 10
+		end
+		content:SetSize(580, -yy + 20)
+	end
+
+	for _, s in ipairs(sections) do
+		local btn = CreateFrame("Button", nil, content)
+		btn:SetSize(360, 22)
+		btn.fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+		btn.fs:SetPoint("LEFT")
+		btn:SetScript("OnClick", function() s.open = not s.open; Relayout() end)
+		btn:SetScript("OnEnter", function() btn.fs:SetTextColor(1, 1, 1) end)
+		btn:SetScript("OnLeave", function() btn.fs:SetTextColor(1, 0.82, 0) end)
+		s.header = btn
+	end
+	Relayout()
+
+	panel:SetScript("OnShow", RefreshChecks)
+
+	category = Settings.RegisterCanvasLayoutCategory(panel,
+		DyingDownTheHouseDB.ui.rainbowTitle and ns.RainbowText("Dyeing Down The House") or "Dyeing Down The House")
+	Settings.RegisterAddOnCategory(category)
+
+	function ns.OpenOptions()
+		if category then Settings.OpenToCategory(category:GetID()) end
+	end
+end
+
+local f = CreateFrame("Frame")
+f:RegisterEvent("PLAYER_LOGIN")
+f:SetScript("OnEvent", function()
+	pcall(BuildPanel)
+end)
