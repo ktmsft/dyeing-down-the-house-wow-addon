@@ -1,0 +1,19 @@
+## Interface: 120007
+## Title: Dyeing Down The House
+## Notes: An account-wide tally of every housing dye across your bags, bank and Warband bank — with goals, recipes and auction prices. Color your world.
+## Author: KTM (abitofmoss)
+## Version: 0.2.0
+## License: MIT
+## Category: Professions
+## IconTexture: 7449428
+## SavedVariables: DyeingDownTheHouseDB
+## OptionalDeps: DataStore, DataStore_Containers
+## AddonCompartmentFunc: DyeingDownTheHouse_OnAddonCompartmentClick
+
+Data.lua
+Core.lua
+Prices.lua
+UI.lua
+Options.lua
+Crafting.lua
+Housing.lua

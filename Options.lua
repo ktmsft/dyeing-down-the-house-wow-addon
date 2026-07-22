@@ -11,14 +11,31 @@ local ADDON, ns = ...
 
 local category, panel, panelTitle
 local checks = {} -- { {cb, get}, ... } refreshed whenever the panel is shown
+local priceRadios = {} -- { {cb, source}, ... } — availability re-checked on show
 
 local function RefreshChecks()
 	for _, c in ipairs(checks) do c.cb:SetChecked(c.get()) end
 end
 
+-- A price source can appear or vanish between openings of this panel (the player
+-- enables TSM and reloads, or disables it mid-session), so availability is read
+-- every time rather than baked in when the panel was built.
+local function RefreshPriceRadios()
+	for _, r in ipairs(priceRadios) do
+		if r.source and r.source.addon then
+			local available = ns.IsPriceSourceAvailable and ns.IsPriceSourceAvailable(r.source)
+			r.cb:SetEnabled(available and true or false)
+			r.cb.label:SetText(available and r.source.name
+				or (r.source.name .. "   (not installed)"))
+			local shade = available and 1 or 0.45
+			r.cb.label:SetTextColor(shade, shade, shade)
+		end
+	end
+end
+
 local function ApplyPanelTitle()
 	if not panelTitle then return end
-	if DyingDownTheHouseDB.ui.rainbowTitle then
+	if DyeingDownTheHouseDB.ui.rainbowTitle then
 		panelTitle:SetText(ns.RainbowText("Dyeing Down The House"))
 	else
 		panelTitle:SetText("Dyeing Down The House")
@@ -37,6 +54,30 @@ local function MakeCheck(parent, label, get, set)
 	return cb
 end
 
+-- A radio row: picks one value out of a set rather than toggling a flag, so these
+-- set rather than invert. UIRadioButtonTemplate is the right look, but it's a
+-- Blizzard template like any other and could be renamed out from under us — fall
+-- back to the checkbox template the rest of the panel already uses.
+local function MakeRadio(parent, label, value, get, set)
+	local cb
+	local made = pcall(function()
+		cb = CreateFrame("CheckButton", nil, parent, "UIRadioButtonTemplate")
+	end)
+	if not made or not cb then
+		cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+		cb:SetSize(22, 22)
+	end
+	local fs = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	fs:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+	fs:SetText(label)
+	cb.label = fs
+	-- Selecting one has to visibly deselect the others, and they're independent
+	-- widgets — so re-read every row's state after any change.
+	cb:SetScript("OnClick", function() set(value); RefreshChecks() end)
+	checks[#checks + 1] = { cb = cb, get = function() return get() == value end }
+	return cb
+end
+
 local function SectionHeader(parent, text)
 	local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	fs:SetText(text)
@@ -44,7 +85,7 @@ local function SectionHeader(parent, text)
 end
 
 -- One checklist (all items on by default; uncheck to hide). Returns the container
--- frame and its pixel height. `swatchColor` optional (dye colours).
+-- frame and its pixel height. `swatchColor` optional (dye colors).
 local function BuildChecklist(content, items, isHidden, setHidden, setAll, swatchColor)
 	local c = CreateFrame("Frame", nil, content)
 
@@ -125,8 +166,11 @@ local function BuildPanel()
 	y = y - 24
 
 	-- Columns to show -------------------------------------------------------
-	SectionHeader(content, "Columns to show"):SetPoint("TOPLEFT", 8, y)
+	SectionHeader(content, "Columns to show   (By Dye tab)"):SetPoint("TOPLEFT", 8, y)
 	y = y - 24
+	-- These are the "By Dye" (per-dye) tab's columns. The "By Color Family" tab has
+	-- a fixed set — every column there is the reason that view exists — so it has
+	-- nothing to toggle.
 	local colDefs = {
 		{ "pigment", "Pigments — owned & craftable" },
 		{ "flowers", "Flowers — owned & craftable" },
@@ -136,9 +180,9 @@ local function BuildPanel()
 	for i, cd in ipairs(colDefs) do
 		local key = cd[1]
 		local cb = MakeCheck(content, cd[2],
-			function() return DyingDownTheHouseDB.ui.cols[key] ~= false end,
+			function() return DyeingDownTheHouseDB.ui.cols[key] ~= false end,
 			function(v)
-				DyingDownTheHouseDB.ui.cols[key] = v
+				DyeingDownTheHouseDB.ui.cols[key] = v
 				if ns.ApplyColumnLayout then ns.ApplyColumnLayout() end
 				ns.Refresh()
 			end)
@@ -150,32 +194,64 @@ local function BuildPanel()
 	SectionHeader(content, "Display"):SetPoint("TOPLEFT", 8, y)
 	y = y - 24
 	MakeCheck(content, "Hide cost-prohibitive flowers",
-		function() return DyingDownTheHouseDB.ui.hideCostlyFlowers end,
-		function(v) DyingDownTheHouseDB.ui.hideCostlyFlowers = v; ns.Refresh() end)
+		function() return DyeingDownTheHouseDB.ui.hideCostlyFlowers end,
+		function(v) DyeingDownTheHouseDB.ui.hideCostlyFlowers = v; ns.Refresh() end)
 		:SetPoint("TOPLEFT", 16, y)
 	MakeCheck(content, "Lock the window in place",
-		function() return DyingDownTheHouseDB.ui.locked end,
-		function(v) DyingDownTheHouseDB.ui.locked = v end)
+		function() return DyeingDownTheHouseDB.ui.locked end,
+		function(v) DyeingDownTheHouseDB.ui.locked = v end)
 		:SetPoint("TOPLEFT", 16 + COL2, y)
 	y = y - 26
 	MakeCheck(content, "Track dyes needed in housing panel",
-		function() return DyingDownTheHouseDB.ui.housingGoalInput end,
-		function(v) DyingDownTheHouseDB.ui.housingGoalInput = v end)
+		function() return DyeingDownTheHouseDB.ui.housingGoalInput end,
+		function(v) DyeingDownTheHouseDB.ui.housingGoalInput = v end)
 		:SetPoint("TOPLEFT", 16, y)
 	MakeCheck(content, "Mark cost-worthy herbs when crafting",
-		function() return DyingDownTheHouseDB.ui.markHerbs end,
-		function(v) DyingDownTheHouseDB.ui.markHerbs = v; if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end end)
+		function() return DyeingDownTheHouseDB.ui.markHerbs end,
+		function(v) DyeingDownTheHouseDB.ui.markHerbs = v; if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end end)
 		:SetPoint("TOPLEFT", 16 + COL2, y)
 	y = y - 26
 	MakeCheck(content, "Rainbow title  (off = plain)",
-		function() return DyingDownTheHouseDB.ui.rainbowTitle end,
+		function() return DyeingDownTheHouseDB.ui.rainbowTitle end,
 		function(v)
-			DyingDownTheHouseDB.ui.rainbowTitle = v
+			DyeingDownTheHouseDB.ui.rainbowTitle = v
 			ApplyPanelTitle()
 			if ns.ApplyTitleColor then ns.ApplyTitleColor() end
 		end)
 		:SetPoint("TOPLEFT", 16, y)
 	y = y - 36
+
+	-- Where prices come from ------------------------------------------------
+	-- Guarded on ns.PRICE_SOURCES so the panel still builds if Prices.lua is absent;
+	-- the addon falls back to its own auction-house scan and this section is simply
+	-- not drawn.
+	if ns.PRICE_SOURCES and ns.GetPriceSource and ns.SetPriceSource then
+		SectionHeader(content, "Where prices come from"):SetPoint("TOPLEFT", 8, y)
+		y = y - 24
+
+		local note = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		note:SetPoint("TOPLEFT", 16, y)
+		note:SetWidth(540)
+		note:SetJustifyH("LEFT")
+		note:SetText("TSM and Auctionator price everything instantly, anywhere in the world. " ..
+			"The built-in scan needs no other addon, but has to query the auction house one item at a time.")
+		note:SetTextColor(0.7, 0.7, 0.7)
+		y = y - 32
+
+		local rows = { { label = "Automatic — use the best one installed", value = "auto" } }
+		for _, source in ipairs(ns.PRICE_SOURCES) do
+			rows[#rows + 1] = { label = source.name, value = source.key, source = source }
+		end
+
+		for i, row in ipairs(rows) do
+			local cb = MakeRadio(content, row.label, row.value,
+				ns.GetPriceSource,
+				function(v) ns.SetPriceSource(v) end)
+			cb:SetPoint("TOPLEFT", 16 + ((i - 1) % 2) * COL2, y - math.floor((i - 1) / 2) * 24)
+			priceRadios[#priceRadios + 1] = { cb = cb, source = row.source }
+		end
+		y = y - 24 * math.ceil(#rows / 2) - 16
+	end
 
 	-- Two collapsible checklists (Dyes, Flowers) ----------------------------
 	local dyeItems = {}
@@ -245,10 +321,13 @@ local function BuildPanel()
 	end
 	Relayout()
 
-	panel:SetScript("OnShow", RefreshChecks)
+	panel:SetScript("OnShow", function()
+		RefreshChecks()
+		RefreshPriceRadios()
+	end)
 
 	category = Settings.RegisterCanvasLayoutCategory(panel,
-		DyingDownTheHouseDB.ui.rainbowTitle and ns.RainbowText("Dyeing Down The House") or "Dyeing Down The House")
+		DyeingDownTheHouseDB.ui.rainbowTitle and ns.RainbowText("Dyeing Down The House") or "Dyeing Down The House")
 	Settings.RegisterAddOnCategory(category)
 
 	function ns.OpenOptions()

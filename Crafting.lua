@@ -103,8 +103,8 @@ end
 --
 -- The picker is an anonymous ScrollBox flyout (verified: buttons expose
 -- :GetItemID() and elementData.reagent.itemID). Its recipe is a pigment, whose
--- colour decides the verdict — is milling this herb worth it for that colour
--- (10 × herb price vs the best dye of the colour)?
+-- color decides the verdict — is milling this herb worth it for that color
+-- (10 × herb price vs the best dye of the color)?
 --------------------------------------------------------------------------------
 
 local CHECK_READY   = "Interface\\RaidFrame\\ReadyCheck-Ready"    -- green check
@@ -128,7 +128,7 @@ end
 
 local function DecorateFlyoutButton(btn, color)
 	-- Respect the config toggle: if off, clear any mark and stop.
-	if not DyingDownTheHouseDB.ui.markHerbs then
+	if not DyeingDownTheHouseDB.ui.markHerbs then
 		if btn.ddthVerdict then btn.ddthVerdict:Hide() end
 		return
 	end

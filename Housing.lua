@@ -89,7 +89,7 @@ local function EnsureBox(pane)
 end
 
 local function UpdatePanel()
-	if not DyingDownTheHouseDB.ui.housingGoalInput then if box then box:Hide() end return end
+	if not DyeingDownTheHouseDB.ui.housingGoalInput then if box then box:Hide() end return end
 	local pane = GetPane()
 	if not pane then if box then box:Hide() end return end
 	local shownOk, shown = pcall(pane.IsShown, pane)

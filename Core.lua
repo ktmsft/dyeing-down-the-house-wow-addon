@@ -4,11 +4,11 @@ local ADDON, ns = ...
 -- Lookups
 --
 -- The crafting chain is: 10 HERBS -> 1 PIGMENT -> 1 DYE, and everything is grouped
--- by COLOUR. Each colour has one pigment; every herb of that colour mills into it,
--- and every dye of that colour is made from it. All three are real items that live
+-- by COLOR. Each color has one pigment; every herb of that color mills into it,
+-- and every dye of that color is made from it. All three are real items that live
 -- in bags, bank and the Warband bank, so the scanning and counting machinery works
 -- over the UNION of all of them (ns.ITEMS). The per-kind views stay available as
--- ns.DYES / ns.PIGMENTS / ns.HERBS, and the colour groupings as ns.pigmentByColor
+-- ns.DYES / ns.PIGMENTS / ns.HERBS, and the color groupings as ns.pigmentByColor
 -- and ns.herbsByColor for the recipe engine.
 --------------------------------------------------------------------------------
 
@@ -49,9 +49,9 @@ function ns.RebuildLookups()
 	end
 	for _, herb in ipairs(ns.HERBS or {}) do
 		add(herb, "herb")
-		-- A herb can mill into more than one colour's pigment (the chart's overlaps),
-		-- so it may appear in several colour buckets. `colors` is the list; `color`
-		-- is accepted as a one-colour shorthand.
+		-- A herb can mill into more than one color's pigment (the chart's overlaps),
+		-- so it may appear in several color buckets. `colors` is the list; `color`
+		-- is accepted as a one-color shorthand.
 		herb.colors = herb.colors or (herb.color and { herb.color }) or {}
 		for _, color in ipairs(herb.colors) do
 			local list = ns.herbsByColor[color]
@@ -99,6 +99,10 @@ local defaults = {
 	goals = {},         -- [dyeKey] = number, account-wide (they measure account totals)
 	learned = {},       -- [key] = itemID discovered by name match
 	prices = {},        -- [key] = { copper = n, seen = ts, source = "ah" }
+	-- Where prices come from. "auto" takes the best source installed; naming one
+	-- pins it. See Prices.lua.
+	priceSource = "auto",     -- "auto" | "blizzard" | "auctionator" | "tsm"
+	tsmPriceKey = "DBMarket", -- TSM custom price string, when TSM is the source
 	ui = {
 		point = "CENTER",
 		relPoint = "CENTER",
@@ -113,9 +117,17 @@ local defaults = {
 		search = "",       -- name filter
 		sort = "alpha",    -- see VALID_SORT
 		sortDir = "asc",   -- "asc" | "desc"
-		-- Which optional columns are shown. Dye + Owned are always shown.
+		-- Which view is on top. "family" groups by color family and answers "what can
+		-- I make"; "dye" is the flat per-dye list and answers "how am I doing on this
+		-- particular dye". They want genuinely different columns, so they're tabs
+		-- rather than one compromised table.
+		tab = "family",           -- "family" | "dye"
+		groupSort = "color",      -- family tab: color | pigment | flowers | makeable | short
+		groupSortDir = "asc",
+		-- Optional columns on the DYE tab. Dye + Have are always shown.
 		cols = { pigment = true, flowers = true, value = true, goal = true },
-		expanded = {}, -- [dyeKey] = true, rows expanded to show their flowers
+		expanded = {},       -- [dyeKey] = true, dye rows opened to show their flowers
+		expandedColors = {}, -- [color] = true, color groups opened on the family tab
 		hideCostlyFlowers = false, -- in the expand view, hide flowers dearer to craft than to buy
 		hiddenDyes = {}, -- [dyeKey] = true, dyes the player unchecked (hidden from the list)
 		hiddenHerbs = {}, -- [herbNameLower] = true, flowers hidden from the expand view
@@ -200,7 +212,7 @@ local function ResolveEntry(info)
 			if entry and not entry.id then
 				entry.id = info.itemID
 				ns.byID[info.itemID] = entry
-				DyingDownTheHouseDB.learned[entry.key] = info.itemID
+				DyeingDownTheHouseDB.learned[entry.key] = info.itemID
 				return entry
 			end
 		end
@@ -225,22 +237,22 @@ local function ScanGroup(ids)
 end
 
 local function ScanBags()
-	local char = DyingDownTheHouseDB.chars[charKey]
+	local char = DyeingDownTheHouseDB.chars[charKey]
 	char.bags = ScanGroup(bagGroups.bags)
 	char.bagsSeen = time()
 end
 
 local function ScanBank()
 	if not bankOpen then return end
-	local char = DyingDownTheHouseDB.chars[charKey]
+	local char = DyeingDownTheHouseDB.chars[charKey]
 	char.bank = ScanGroup(bagGroups.bank)
 	char.bankSeen = time()
 
 	-- The Warband bank is one shared inventory, so the newest scan by any character
 	-- replaces it wholesale rather than adding to it.
-	DyingDownTheHouseDB.warband = ScanGroup(bagGroups.warband)
-	DyingDownTheHouseDB.warbandSeen = time()
-	DyingDownTheHouseDB.warbandSeenBy = charKey
+	DyeingDownTheHouseDB.warband = ScanGroup(bagGroups.warband)
+	DyeingDownTheHouseDB.warbandSeen = time()
+	DyeingDownTheHouseDB.warbandSeenBy = charKey
 end
 
 --------------------------------------------------------------------------------
@@ -279,8 +291,8 @@ local function LiveReachableCount(itemID)
 end
 
 local function ReconcileLive()
-	if not (DyingDownTheHouseDB and charKey) then return end
-	local char = DyingDownTheHouseDB.chars[charKey]
+	if not (DyeingDownTheHouseDB and charKey) then return end
+	local char = DyeingDownTheHouseDB.chars[charKey]
 	if not char then return end
 
 	local changed = false
@@ -291,7 +303,7 @@ local function ReconcileLive()
 			if live then
 				local bags = (char.bags and char.bags[entry.key]) or 0
 				local bank = (char.bank and char.bank[entry.key]) or 0
-				local warband = DyingDownTheHouseDB.warband[entry.key] or 0
+				local warband = DyeingDownTheHouseDB.warband[entry.key] or 0
 				local deficit = (bags + bank + warband) - live
 
 				if deficit > 0 then
@@ -306,7 +318,7 @@ local function ReconcileLive()
 						changed = true
 					end
 					if deficit > 0 and warband > 0 then
-						DyingDownTheHouseDB.warband[entry.key] = math.max(0, warband - deficit)
+						DyeingDownTheHouseDB.warband[entry.key] = math.max(0, warband - deficit)
 						changed = true
 					end
 				end
@@ -359,7 +371,7 @@ local function RefreshBorrowed()
 			if not (realm and name) then return end
 
 			local ourKey = name .. "-" .. realm
-			if DyingDownTheHouseDB.chars[ourKey] then return end -- we have our own scan
+			if DyeingDownTheHouseDB.chars[ourKey] then return end -- we have our own scan
 
 			local bags, bank
 			for _, entry in ipairs(ns.ITEMS) do
@@ -402,11 +414,11 @@ end
 -- Every character contributing to the totals: ours first, then anything DataStore
 -- knows that we don't. Callers must not care which is which.
 local function EachCharacter(callback)
-	for ck, char in pairs(DyingDownTheHouseDB.chars) do
+	for ck, char in pairs(DyeingDownTheHouseDB.chars) do
 		callback(ck, char, false)
 	end
 	for ck, char in pairs(borrowed) do
-		if not DyingDownTheHouseDB.chars[ck] then
+		if not DyeingDownTheHouseDB.chars[ck] then
 			callback(ck, char, true)
 		end
 	end
@@ -435,7 +447,7 @@ end
 -- is added once, outside the character loop, and is always our own — never
 -- DataStore's — which keeps it from being multiplied by the roster size.
 function ns.GetTotal(key)
-	local total = (DyingDownTheHouseDB.warband[key]) or 0
+	local total = (DyeingDownTheHouseDB.warband[key]) or 0
 	EachCharacter(function(_, char)
 		total = total + ((char.bags and char.bags[key]) or 0)
 		              + ((char.bank and char.bank[key]) or 0)
@@ -448,7 +460,7 @@ end
 function ns.GetBreakdown(key)
 	local result = {
 		chars = {},
-		warband = DyingDownTheHouseDB.warband[key] or 0,
+		warband = DyeingDownTheHouseDB.warband[key] or 0,
 		total = 0,
 	}
 
@@ -485,12 +497,12 @@ end
 -- Roster scan freshness, newest bank visit first, for the header tooltip.
 function ns.GetScanInfo()
 	local info = {
-		warbandSeen = DyingDownTheHouseDB.warbandSeen,
-		warbandSeenBy = DyingDownTheHouseDB.warbandSeenBy,
+		warbandSeen = DyeingDownTheHouseDB.warbandSeen,
+		warbandSeenBy = DyeingDownTheHouseDB.warbandSeenBy,
 		chars = {},
 	}
 
-	for ck, char in pairs(DyingDownTheHouseDB.chars) do
+	for ck, char in pairs(DyeingDownTheHouseDB.chars) do
 		info.chars[#info.chars + 1] = {
 			key = ck,
 			name = char.name or ck,
@@ -510,7 +522,7 @@ function ns.GetScanInfo()
 	return info
 end
 
--- "3 minutes ago" etc, plus a colour that fades as the data goes stale.
+-- "3 minutes ago" etc, plus a color that fades as the data goes stale.
 function ns.FormatAge(timestamp)
 	if not timestamp then
 		return "never", 1, 0.4, 0.4
@@ -542,15 +554,15 @@ function ns.FormatAge(timestamp)
 end
 
 function ns.GetGoal(key)
-	return DyingDownTheHouseDB.goals[key] or 0
+	return DyeingDownTheHouseDB.goals[key] or 0
 end
 
 function ns.SetGoal(key, value)
 	value = tonumber(value)
 	if not value or value <= 0 then
-		DyingDownTheHouseDB.goals[key] = nil
+		DyeingDownTheHouseDB.goals[key] = nil
 	else
-		DyingDownTheHouseDB.goals[key] = math.floor(value)
+		DyeingDownTheHouseDB.goals[key] = math.floor(value)
 	end
 	ns.Refresh()
 end
@@ -558,7 +570,7 @@ end
 -- True once any character on the account has visited a bank, so the UI can say
 -- "never scanned" instead of silently showing 0.
 function ns.HasBankData()
-	return DyingDownTheHouseDB.warbandSeen ~= nil
+	return DyeingDownTheHouseDB.warbandSeen ~= nil
 end
 
 function ns.IsBankOpen()
@@ -576,9 +588,9 @@ end
 function ns.SetPrice(key, copper, source)
 	copper = tonumber(copper)
 	if not copper or copper < 0 then
-		DyingDownTheHouseDB.prices[key] = nil
+		DyeingDownTheHouseDB.prices[key] = nil
 	else
-		DyingDownTheHouseDB.prices[key] = {
+		DyeingDownTheHouseDB.prices[key] = {
 			copper = math.floor(copper),
 			seen = time(),
 			source = source or "ah",
@@ -588,12 +600,12 @@ end
 
 -- The stored unit price in copper, or nil if we've never scanned one.
 function ns.GetPrice(key)
-	local p = DyingDownTheHouseDB.prices[key]
+	local p = DyeingDownTheHouseDB.prices[key]
 	return p and p.copper or nil
 end
 
 function ns.GetPriceInfo(key)
-	return DyingDownTheHouseDB.prices[key]
+	return DyeingDownTheHouseDB.prices[key]
 end
 
 -- The gold value of everything the account holds of this item: total × unit price.
@@ -604,6 +616,13 @@ function ns.GetValue(key)
 	if not price then return nil end
 	return ns.GetTotal(key) * price
 end
+
+-- Declared up here because the scanner reports on itself (skipped items, price
+-- imports) long before the slash-command block below would have defined it.
+local function Print(msg)
+	print("|cffb388ffDyeing Down The House|r: " .. msg)
+end
+ns.Print = Print -- Prices.lua reports through the same prefix
 
 --------------------------------------------------------------------------------
 -- Auction House scanning
@@ -648,15 +667,47 @@ function ns.ComputeMarketPrice(listings, minDepth)
 	return lastPrice, cumulative -- fewer than minDepth on the market
 end
 
-local scan = { active = false, queue = {}, index = 0, itemID = nil, awaitingNext = false }
+-- Pacing and recovery.
+--
+-- Blizzard's auction API is rate limited, and when you exceed it the server simply
+-- DROPS the query: no results, no error event, nothing at all. The original scanner
+-- was a pure event chain — send a query, wait for its reply, send the next — so one
+-- dropped query stranded the entire run with no way out but closing the AH. That is
+-- the "scan stops after 8-12 items" bug; that count is roughly one burst allowance
+-- before the limiter bites.
+--
+-- Three defenses, since the limiter's state isn't directly observable:
+--   * PACING — a floor on the gap between queries, on top of Blizzard's own
+--     IsThrottledMessageSystemReady check.
+--   * A WATCHDOG — if a reply doesn't arrive in time, retry the item; once the
+--     retries are spent, count it skipped and move on. One bad item can no longer
+--     strand the run.
+--   * VERIFICATION — replies are matched against the item actually asked for, so a
+--     late answer to an abandoned query can't be filed as another item's price.
+ns.SCAN_INTERVAL = ns.SCAN_INTERVAL or 0.35 -- seconds between queries
+ns.SCAN_TIMEOUT  = ns.SCAN_TIMEOUT  or 6    -- seconds to wait for a reply
+ns.SCAN_RETRIES  = ns.SCAN_RETRIES  or 2    -- extra attempts before skipping an item
+ns.SCAN_MAX_WAIT = ns.SCAN_MAX_WAIT or 40   -- throttle polls (0.5s each) before giving up
+
+local scan = {
+	active = false,
+	queue = {},
+	index = 0,
+	itemID = nil,
+	awaitingNext = false,
+	token = 0,  -- bumped on every dispatch; a watchdog acts only if it still matches
+	tries = 0,  -- attempts spent on the current item
+	waits = 0,  -- consecutive throttle polls on the current item
+	failed = 0, -- items given up on during this run
+}
 local ahOpen = false
 
 function ns.IsAHOpen() return ahOpen end
 function ns.IsScanning() return scan.active end
 
--- active, done, total
+-- active, done, total, skipped
 function ns.GetScanProgress()
-	return scan.active, scan.index, #scan.queue
+	return scan.active, scan.index, #scan.queue, scan.failed
 end
 
 local function ReadCommodityListings(itemID)
@@ -686,43 +737,121 @@ end
 
 local scanFrame
 
-local function SendNextQuery()
-	scan.index = scan.index + 1
-	if scan.index > #scan.queue then
-		scan.active = false
-		scan.itemID = nil
-		DyingDownTheHouseDB.lastScan = time() -- for the "scanned Xm ago" stamp
-		-- No chat output: the floating overlay showed progress and now hides itself.
-		ns.Refresh()
-		return
+-- These three call each other: a watchdog timeout advances the scan, which waits
+-- for a clear throttle, which sends a query, which arms another watchdog. Declared
+-- as plain locals first so none of them is a forward reference (see
+-- tools/check_order.lua for why that matters in WoW's Lua).
+local SendCurrentQuery, AdvanceScan, TryDispatch
+
+-- Abandon whatever query is in flight, so no late reply and no armed watchdog can
+-- act on it. Every state change that makes the in-flight query irrelevant calls this.
+local function InvalidateInFlight()
+	scan.token = scan.token + 1
+end
+
+local function FinishScan()
+	InvalidateInFlight()
+	scan.active = false
+	scan.itemID = nil
+	scan.awaitingNext = false
+	DyeingDownTheHouseDB.lastScan = time() -- for the "scanned Xm ago" stamp
+	-- Progress rode the floating overlay, so success stays silent. A partial scan
+	-- does NOT: quietly pricing 40 of 60 items would leave craft-vs-buy verdicts
+	-- confidently wrong with nothing on screen to say so.
+	if scan.failed > 0 then
+		Print(("scan finished, but %d item%s never answered and %s skipped. Run it again to fill the gaps.")
+			:format(scan.failed, scan.failed == 1 and "" or "s", scan.failed == 1 and "was" or "were"))
 	end
-	scan.itemID = scan.queue[scan.index]
+	ns.Refresh()
+end
+
+-- Arm the watchdog for the query about to be sent. If no reply lands in time, retry
+-- the same item; once its retries are spent, count it skipped and move on.
+local function ArmWatchdog()
+	local token = scan.token
+	C_Timer.After(ns.SCAN_TIMEOUT, function()
+		-- Answered already, or the scan moved on / stopped: nothing to do.
+		if not scan.active or scan.token ~= token then return end
+		if scan.tries <= ns.SCAN_RETRIES then
+			SendCurrentQuery(true)
+		else
+			scan.failed = scan.failed + 1
+			AdvanceScan()
+		end
+	end)
+end
+
+function SendCurrentQuery(isRetry)
+	if not scan.active then return end
+	local itemID = scan.queue[scan.index]
+	if not itemID then FinishScan() return end
+
+	scan.itemID = itemID
+	scan.tries = isRetry and (scan.tries + 1) or 1
+	InvalidateInFlight() -- any watchdog from a previous attempt is now stale
 
 	local sorts
 	if Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price then
 		sorts = { { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false } }
 	end
-	local ok, itemKey = pcall(C_AuctionHouse.MakeItemKey, scan.itemID)
+
+	local ok, itemKey = pcall(C_AuctionHouse.MakeItemKey, itemID)
+	local sent = false
 	if ok and itemKey then
-		pcall(C_AuctionHouse.SendSearchQuery, itemKey, sorts or {}, false)
-	else
-		-- Couldn't query this one; skip to the next.
-		SendNextQuery()
+		sent = pcall(C_AuctionHouse.SendSearchQuery, itemKey, sorts or {}, false)
 	end
+
+	if not sent then
+		-- Couldn't even form or send the query; retrying won't help this one.
+		scan.failed = scan.failed + 1
+		AdvanceScan()
+		return
+	end
+
+	ArmWatchdog()
 	ns.Refresh()
 end
 
-local function AdvanceWhenReady()
-	scan.awaitingNext = true
+-- Send the current item's query as soon as the throttle allows. Blizzard usually
+-- wakes us with AUCTION_HOUSE_THROTTLED_SYSTEM_READY, but that event is not
+-- guaranteed to arrive, so this also polls itself as a backstop.
+function TryDispatch()
+	if not (scan.active and scan.awaitingNext) then return end
+
 	local ready = true
 	if type(C_AuctionHouse.IsThrottledMessageSystemReady) == "function" then
-		ready = C_AuctionHouse.IsThrottledMessageSystemReady()
+		local ok, r = pcall(C_AuctionHouse.IsThrottledMessageSystemReady)
+		ready = (not ok) or (r and true or false) -- an erroring check shouldn't block us
 	end
+
 	if ready then
 		scan.awaitingNext = false
-		SendNextQuery()
+		SendCurrentQuery(false)
+		return
 	end
-	-- else: wait for AUCTION_HOUSE_THROTTLED_SYSTEM_READY
+
+	scan.waits = scan.waits + 1
+	if scan.waits > ns.SCAN_MAX_WAIT then
+		-- Throttled for ~20s with no let-up. Skip rather than hang forever.
+		scan.awaitingNext = false
+		scan.failed = scan.failed + 1
+		AdvanceScan()
+		return
+	end
+	C_Timer.After(0.5, TryDispatch)
+end
+
+function AdvanceScan()
+	if not scan.active then return end
+	InvalidateInFlight()
+
+	scan.index = scan.index + 1
+	if scan.index > #scan.queue then FinishScan() return end
+
+	scan.awaitingNext = true
+	scan.waits = 0
+	C_Timer.After(ns.SCAN_INTERVAL, TryDispatch)
+	ns.Refresh()
 end
 
 -- The list of item IDs a scan will price, in order. Pure, so it's testable.
@@ -744,22 +873,38 @@ function ns.BuildScanQueue(items)
 	return queue
 end
 
-function ns.StartScan(items)
+-- Price everything by querying the auction house ourselves. This is the fallback
+-- source: it's the only one that needs no other addon, but it's also the slow one
+-- (one throttled query per item, and you have to be standing at the AH). Prices.lua
+-- puts the faster sources in front of it.
+function ns.StartAHScan(items)
 	if scan.active then return false, "already scanning" end
 	if not ahOpen or type(C_AuctionHouse) ~= "table" then
 		return false, "open the Auction House first"
 	end
 
 	scan.queue = ns.BuildScanQueue(items)
+	if #scan.queue == 0 then
+		return false, "nothing to price — every dye and flower is hidden"
+	end
 
 	scan.active = true
 	scan.index = 0
+	scan.tries = 0
+	scan.waits = 0
+	scan.failed = 0
 	-- "Hold your brutosaurs…" now rides the floating overlay, not the chat frame.
-	AdvanceWhenReady()
+	AdvanceScan()
 	return true
 end
 
+-- Default entry point. Prices.lua replaces this with a dispatcher that can route to
+-- Auctionator or TSM instead; assigning here means the AH scan still works on its
+-- own if that file is ever absent or fails to load.
+ns.StartScan = ns.StartAHScan
+
 function ns.StopScan()
+	InvalidateInFlight()
 	scan.active = false
 	scan.itemID = nil
 	scan.awaitingNext = false
@@ -776,7 +921,7 @@ for _, ev in ipairs({
 	pcall(scanFrame.RegisterEvent, scanFrame, ev)
 end
 
-scanFrame:SetScript("OnEvent", function(_, event)
+scanFrame:SetScript("OnEvent", function(_, event, arg1)
 	if event == "AUCTION_HOUSE_SHOW" then
 		ahOpen = true
 		ns.Refresh()
@@ -785,41 +930,41 @@ scanFrame:SetScript("OnEvent", function(_, event)
 		ns.StopScan()
 		ns.Refresh()
 	elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
-		if scan.active and scan.itemID then
+		-- arg1 is the item the results belong to. A reply for anything other than the
+		-- query in flight is a late answer to one we already timed out on — storing it
+		-- would file one item's listings under another item's price.
+		if scan.active and scan.itemID and (arg1 == nil or arg1 == scan.itemID) then
 			StoreScannedPrice(scan.itemID)
-			AdvanceWhenReady()
+			AdvanceScan()
 		end
 	elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
 		-- One of our items turned out non-commodity: skip pricing, keep going.
-		if scan.active then AdvanceWhenReady() end
+		if scan.active then AdvanceScan() end
 	elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then
-		if scan.active and scan.awaitingNext then
-			scan.awaitingNext = false
-			SendNextQuery()
-		end
+		if scan.active and scan.awaitingNext then TryDispatch() end
 	end
 end)
 
 --------------------------------------------------------------------------------
 -- Recipes — the 10 herbs -> 1 pigment -> 1 dye chain
 --
--- Each dye is made from one PIGMENT of the dye's colour; each pigment is milled
--- from HERBS of that colour. Herbs of a colour form a fungible pool — any herb of
--- the colour mills into that colour's pigment — so the useful figure is the total
--- herb count for the colour, not per-herb.
+-- Each dye is made from one PIGMENT of the dye's color; each pigment is milled
+-- from HERBS of that color. Herbs of a color form a fungible pool — any herb of
+-- the color mills into that color's pigment — so the useful figure is the total
+-- herb count for the color, not per-herb.
 --------------------------------------------------------------------------------
 
--- The supply picture for one colour: how many pigments the account already holds,
+-- The supply picture for one color: how many pigments the account already holds,
 -- how many more it could mill from its herb pool, and the herb breakdown. This is
--- the per-colour number the game's craft window shows (makeablePigments), computed
--- ourselves so it can be combined across colours for the contention view.
+-- the per-color number the game's craft window shows (makeablePigments), computed
+-- ourselves so it can be combined across colors for the contention view.
 function ns.GetColorSupply(color)
 	local pigment = ns.pigmentByColor[color]
 	local ownedPigments = pigment and ns.GetTotal(pigment.key) or 0
 
 	local perPigment = ns.HERBS_PER_PIGMENT
 
-	-- Milling needs 10 of the SAME herb, so a colour's pigment yield is the sum of
+	-- Milling needs 10 of the SAME herb, so a color's pigment yield is the sum of
 	-- floor(count / 10) over each herb separately — NOT floor(total / 10). Odd
 	-- remainders in different herbs can't be combined into a pigment.
 	local herbs = ns.herbsByColor[color] or {}
@@ -832,7 +977,7 @@ function ns.GetColorSupply(color)
 			key = herb.key,
 			name = herb.name or ("Item " .. tostring(herb.id)), -- pending a cached name
 			have = have,
-			-- The other colours this herb also feeds, so the UI can flag contention.
+			-- The other colors this herb also feeds, so the UI can flag contention.
 			colors = herb.colors or {},
 		}
 	end
@@ -849,9 +994,9 @@ function ns.GetColorSupply(color)
 	}
 end
 
--- Status for a single dye against its goal. Treats this colour's herbs in
--- isolation (dedicated to this dye); the cross-colour contention — where a shared
--- herb can't feed two colours at once — is a separate, whole-account question
+-- Status for a single dye against its goal. Treats this color's herbs in
+-- isolation (dedicated to this dye); the cross-color contention — where a shared
+-- herb can't feed two colors at once — is a separate, whole-account question
 -- answered by ns.PlanGoals below.
 function ns.GetRecipeStatus(dyeKey)
 	local dye = ns.byKey[dyeKey]
@@ -900,7 +1045,7 @@ function ns.GetRecipeStatus(dyeKey)
 		pigmentsShort = pigmentsShort,   -- pigments still to mill
 		herbsNeeded = herbsNeeded,       -- herbs to mill those pigments
 		herbsShort = herbsShort,         -- herbs still to gather/buy
-		craftableNow = craftableNow,     -- dyes makeable right now from this colour
+		craftableNow = craftableNow,     -- dyes makeable right now from this color
 		craftableFromPigments = craftableFromPigments, -- dyes from pigments held
 		craftableFromHerbs = craftableFromHerbs,       -- dyes from milling flowers held
 		canCraftGoal = canCraftGoal,     -- can current supply close the shortfall?
@@ -920,7 +1065,7 @@ function ns.GetCraftBreakdown(dyeKey)
 	local perDye = ns.HERBS_PER_PIGMENT * ns.PIGMENTS_PER_DYE -- flowers per dye (10)
 	local dyePrice = ns.GetPrice(dyeKey)                       -- buy-outright cost, may be nil
 
-	local hiddenHerbs = DyingDownTheHouseDB.ui.hiddenHerbs or {}
+	local hiddenHerbs = DyeingDownTheHouseDB.ui.hiddenHerbs or {}
 	local flowers, cheapestCraft = {}, nil
 	for _, herb in ipairs(ns.herbsByColor[dye.color] or {}) do
 		-- Skip flowers the player has hidden (by name). No `goto` — WoW's Lua 5.1
@@ -969,7 +1114,7 @@ end
 
 -- For the pigment reagent picker: is milling THIS flower worth it for `color`?
 -- 10 flowers make one dye's worth of pigment, so compares 10 × flower price to the
--- best-priced dye of that colour (the most you could get out of the pigment).
+-- best-priced dye of that color (the most you could get out of the pigment).
 -- Returns true (worth crafting), false (cost-prohibitive), or nil (price unknown).
 function ns.GetHerbCraftVerdict(herbKey, color)
 	local herbPrice = ns.GetPrice(herbKey)
@@ -999,7 +1144,7 @@ end
 --------------------------------------------------------------------------------
 
 -- Dyes matching `query` (case-insensitive substring). A dye matches when the
--- needle is found in its own name OR in its colour-family name — so "blue" finds
+-- needle is found in its own name OR in its color-family name — so "blue" finds
 -- the dyes literally named "…Blue…" AND every dye whose family is blue. Empty or
 -- nil query returns every dye, in Data.lua order.
 function ns.FilterDyes(query)
@@ -1095,7 +1240,7 @@ end
 -- the current sort + direction. Reads the persisted ui.* so the UI and slash
 -- commands share one path.
 function ns.GetDisplayDyes()
-	local ui = DyingDownTheHouseDB and DyingDownTheHouseDB.ui or {}
+	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
 	local hidden = ui.hiddenDyes or {}
 	local shown = {}
 	for _, d in ipairs(ns.FilterDyes(ui.search)) do
@@ -1104,35 +1249,201 @@ function ns.GetDisplayDyes()
 	return ns.SortDyes(shown, ui.sort, ui.sortDir)
 end
 
+--------------------------------------------------------------------------------
+-- Color families (the "By Color Family" tab)
+--
+-- Grouping exists because pigments and flowers belong to a COLOR, not to a dye.
+-- Every black dye mills from the same flowers and draws on the same pigment pile, so
+-- printing those figures on all six black rows implied six separate stockpiles when
+-- there is one. The family view states them once.
+--------------------------------------------------------------------------------
+
+local VALID_GROUP_SORT = {
+	color = true, pigment = true, flowers = true, makeable = true, short = true,
+}
+local GROUP_DEFAULT_DIR = {
+	color    = "asc",  -- the canonical order in ns.COLORS
+	pigment  = "desc", -- most stock first
+	flowers  = "desc",
+	makeable = "desc",
+	short    = "desc", -- most work outstanding first
+}
+
+function ns.GetGroupSort()
+	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
+	local mode = VALID_GROUP_SORT[ui.groupSort] and ui.groupSort or "color"
+	return mode, ui.groupSortDir or GROUP_DEFAULT_DIR[mode]
+end
+
+function ns.SetGroupSort(mode, dir)
+	if not VALID_GROUP_SORT[mode] then return false end
+	local ui = DyeingDownTheHouseDB.ui
+	ui.groupSort, ui.groupSortDir = mode, dir or GROUP_DEFAULT_DIR[mode]
+	ns.Refresh()
+	return true
+end
+
+-- Clicking the active column flips it; clicking another switches to it at that
+-- column's natural direction. Same behavior as the dye list's headers.
+function ns.CycleGroupSort(mode)
+	if not VALID_GROUP_SORT[mode] then return end
+	local ui = DyeingDownTheHouseDB.ui
+	if ui.groupSort == mode then
+		ui.groupSortDir = (ui.groupSortDir == "asc") and "desc" or "asc"
+	else
+		ui.groupSort = mode
+		ui.groupSortDir = GROUP_DEFAULT_DIR[mode]
+	end
+	ns.Refresh()
+end
+
+-- One entry per color that has any visible dye, each carrying the family's shared
+-- supply and how many of its dyes are still under their goal. Both are computed here
+-- rather than in the UI so the family tab's headers can sort on them.
+function ns.GetDisplayGroups()
+	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
+	local hidden = ui.hiddenDyes or {}
+
+	local byColor = {}
+	for _, dye in ipairs(ns.FilterDyes(ui.search)) do
+		if not hidden[dye.key] then
+			local list = byColor[dye.color]
+			if not list then list = {}; byColor[dye.color] = list end
+			list[#list + 1] = dye
+		end
+	end
+
+	local order = {}
+	for i, color in ipairs(ns.COLORS) do order[color] = i end
+
+	local groups, taken = {}, {}
+	local function emit(color)
+		local dyes = byColor[color]
+		if not dyes or #dyes == 0 or taken[color] then return end
+		taken[color] = true
+
+		local short = 0
+		for _, dye in ipairs(dyes) do
+			local goal = ns.GetGoal(dye.key)
+			if goal > 0 and ns.GetTotal(dye.key) < goal then short = short + 1 end
+		end
+
+		local supply = ns.GetColorSupply(color)
+		groups[#groups + 1] = {
+			color = color,
+			dyes = ns.SortDyes(dyes, ui.sort, ui.sortDir),
+			supply = supply,
+			short = short,
+			-- Flattened for sorting and for the family tab's cells.
+			pigment = supply.ownedPigments,
+			flowers = supply.ownedHerbs,
+			makeable = supply.makeablePigments,
+			index = order[color] or 99,
+		}
+	end
+
+	for _, color in ipairs(ns.COLORS) do emit(color) end
+	-- A dye whose color isn't in ns.COLORS would otherwise vanish from the window
+	-- entirely. Better to show it in an odd position than to lose it.
+	for color in pairs(byColor) do emit(color) end
+
+	local mode, dir = ns.GetGroupSort()
+	local asc = (dir == "asc")
+	table.sort(groups, function(a, b)
+		if mode ~= "color" then
+			local ma, mb = a[mode] or 0, b[mode] or 0
+			if ma ~= mb then if asc then return ma < mb else return ma > mb end end
+		end
+		-- Canonical color order is the tiebreak, and the whole sort when mode=="color".
+		if asc or mode ~= "color" then return a.index < b.index end
+		return a.index > b.index
+	end)
+
+	return groups
+end
+
+-- A color is open when the player opened it — or whenever a search is running. A
+-- search that narrowed the list to three dyes but left every group shut would look
+-- like it had found nothing at all.
+function ns.IsColorExpanded(color)
+	local ui = DyeingDownTheHouseDB.ui
+	if (ui.search or "") ~= "" then return true end
+	return ui.expandedColors[color] == true
+end
+
+function ns.ToggleColor(color)
+	local ui = DyeingDownTheHouseDB.ui
+	ui.expandedColors[color] = (not ui.expandedColors[color]) or nil
+	ns.Refresh()
+end
+
+local VALID_TAB = { family = true, dye = true }
+
+function ns.GetTab()
+	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
+	return VALID_TAB[ui.tab] and ui.tab or "family"
+end
+
+function ns.SetTab(tab)
+	if not VALID_TAB[tab] then return false end
+	DyeingDownTheHouseDB.ui.tab = tab
+	ns.Refresh()
+	return true
+end
+
+function ns.SetAllColorsExpanded(open)
+	local e = DyeingDownTheHouseDB.ui.expandedColors
+	for _, color in ipairs(ns.COLORS) do e[color] = open and true or nil end
+	ns.Refresh()
+end
+
+-- Craft-vs-buy for a whole color. The per-flower figures are the same ones
+-- GetCraftBreakdown produces, but the "worth crafting?" comparison is made against
+-- the DEAREST dye of the color — the most that pigment could become — because a
+-- color's flowers aren't tied to any single dye. Matches GetHerbCraftVerdict, which
+-- the reagent-picker markers already use.
+function ns.GetColorCraftBreakdown(color)
+	local pick, best
+	for _, dye in ipairs(ns.DYES) do
+		if dye.color == color then
+			pick = pick or dye.key
+			local price = ns.GetPrice(dye.key)
+			if price and (not best or price > best) then best, pick = price, dye.key end
+		end
+	end
+	if not pick then return nil end
+	return ns.GetCraftBreakdown(pick)
+end
+
 function ns.IsDyeHidden(key)
-	return (DyingDownTheHouseDB.ui.hiddenDyes[key] == true)
+	return (DyeingDownTheHouseDB.ui.hiddenDyes[key] == true)
 end
 
 function ns.SetDyeHidden(key, hidden)
-	DyingDownTheHouseDB.ui.hiddenDyes[key] = hidden and true or nil
+	DyeingDownTheHouseDB.ui.hiddenDyes[key] = hidden and true or nil
 	ns.Refresh()
 end
 
 -- Show or hide every dye at once (the Check All / Uncheck All buttons).
 function ns.SetAllDyesHidden(hidden)
-	local h = DyingDownTheHouseDB.ui.hiddenDyes
+	local h = DyeingDownTheHouseDB.ui.hiddenDyes
 	for _, dye in ipairs(ns.DYES) do h[dye.key] = hidden and true or nil end
 	ns.Refresh()
 end
 
 -- Flowers are hidden by NAME (so all of a flower's quality tiers hide together).
 function ns.IsHerbHidden(name)
-	return name ~= nil and DyingDownTheHouseDB.ui.hiddenHerbs[name:lower()] == true
+	return name ~= nil and DyeingDownTheHouseDB.ui.hiddenHerbs[name:lower()] == true
 end
 
 function ns.SetHerbHidden(name, hidden)
 	if not name then return end
-	DyingDownTheHouseDB.ui.hiddenHerbs[name:lower()] = hidden and true or nil
+	DyeingDownTheHouseDB.ui.hiddenHerbs[name:lower()] = hidden and true or nil
 	ns.Refresh()
 end
 
 function ns.SetAllHerbsHidden(hidden)
-	local h = DyingDownTheHouseDB.ui.hiddenHerbs
+	local h = DyeingDownTheHouseDB.ui.hiddenHerbs
 	for _, herb in ipairs(ns.HERBS) do
 		if herb.name then h[herb.name:lower()] = hidden and true or nil end
 	end
@@ -1153,8 +1464,8 @@ function ns.GetDistinctHerbNames()
 	return out
 end
 
--- A string coloured letter-by-letter across a rainbow, for the flashy title.
--- Spaces are left uncoloured. Cheap enough to build once at login.
+-- A string colored letter-by-letter across a rainbow, for the flashy title.
+-- Spaces are left uncolored. Cheap enough to build once at login.
 function ns.RainbowText(str)
 	local function hsv(h)
 		h = h % 1
@@ -1186,32 +1497,32 @@ function ns.RainbowText(str)
 end
 
 function ns.SetSearch(text)
-	DyingDownTheHouseDB.ui.search = text or ""
+	DyeingDownTheHouseDB.ui.search = text or ""
 	ns.Refresh()
 end
 
 function ns.GetSearch()
-	return DyingDownTheHouseDB.ui.search or ""
+	return DyeingDownTheHouseDB.ui.search or ""
 end
 
 function ns.SetSort(mode, dir)
 	if not VALID_SORT[mode] then return false end
-	DyingDownTheHouseDB.ui.sort = mode
-	DyingDownTheHouseDB.ui.sortDir = dir or DEFAULT_DIR[mode]
+	DyeingDownTheHouseDB.ui.sort = mode
+	DyeingDownTheHouseDB.ui.sortDir = dir or DEFAULT_DIR[mode]
 	ns.Refresh()
 	return true
 end
 
 function ns.GetSort()
-	local ui = DyingDownTheHouseDB and DyingDownTheHouseDB.ui or {}
+	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
 	return ui.sort or "alpha", ui.sortDir or DEFAULT_DIR[ui.sort or "alpha"]
 end
 
--- Header-click behaviour: clicking the active column flips its direction; clicking
+-- Header-click behavior: clicking the active column flips its direction; clicking
 -- a different column switches to it at that column's natural default direction.
 function ns.CycleSort(mode)
 	if not VALID_SORT[mode] then return end
-	local ui = DyingDownTheHouseDB.ui
+	local ui = DyeingDownTheHouseDB.ui
 	if ui.sort == mode then
 		ui.sortDir = (ui.sortDir == "asc") and "desc" or "asc"
 	else
@@ -1223,7 +1534,7 @@ end
 
 -- Reset the list to its default view: no search, alphabetical A–Z.
 function ns.ClearFilters()
-	local ui = DyingDownTheHouseDB.ui
+	local ui = DyeingDownTheHouseDB.ui
 	ui.search, ui.sort, ui.sortDir = "", "alpha", DEFAULT_DIR.alpha
 	ns.Refresh()
 end
@@ -1290,15 +1601,15 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 	if event == "ADDON_LOADED" then
 		if arg1 ~= ADDON then return end
 
-		DyingDownTheHouseDB = DyingDownTheHouseDB or {}
-		ApplyDefaults(DyingDownTheHouseDB, defaults)
+		DyeingDownTheHouseDB = DyeingDownTheHouseDB or {}
+		ApplyDefaults(DyeingDownTheHouseDB, defaults)
 
 		local name, realm = UnitFullName("player")
 		realm = realm or GetRealmName()
 		charKey = name .. "-" .. realm
-		DyingDownTheHouseDB.chars[charKey] = DyingDownTheHouseDB.chars[charKey] or {}
+		DyeingDownTheHouseDB.chars[charKey] = DyeingDownTheHouseDB.chars[charKey] or {}
 
-		local char = DyingDownTheHouseDB.chars[charKey]
+		local char = DyeingDownTheHouseDB.chars[charKey]
 		char.bags = char.bags or {}
 		char.bank = char.bank or {}
 		char.name = name
@@ -1306,7 +1617,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		char.class = select(2, UnitClass("player"))
 
 		-- Re-apply any item IDs learned by name matching in earlier sessions.
-		for key, id in pairs(DyingDownTheHouseDB.learned) do
+		for key, id in pairs(DyeingDownTheHouseDB.learned) do
 			local entry = ns.byKey[key]
 			if entry then
 				entry.id = id
@@ -1322,7 +1633,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		ScanBags()
 		RefreshBorrowed()
 		ns.Refresh()
-		if DyingDownTheHouseDB.ui.shown then ns.Show() end
+		if DyeingDownTheHouseDB.ui.shown then ns.Show() end
 
 	elseif event == "BANKFRAME_OPENED" then
 		bankOpen = true
@@ -1341,35 +1652,31 @@ end)
 -- Slash commands
 --------------------------------------------------------------------------------
 
-SLASH_DYINGDOWNTHEHOUSE1 = "/dye"
-SLASH_DYINGDOWNTHEHOUSE2 = "/dyes"
-SLASH_DYINGDOWNTHEHOUSE3 = "/ddth"
+SLASH_DYEINGDOWNTHEHOUSE1 = "/dye"
+SLASH_DYEINGDOWNTHEHOUSE2 = "/dyes"
+SLASH_DYEINGDOWNTHEHOUSE3 = "/ddth"
 
-local function Print(msg)
-	print("|cffb388ffDyeing Down The House|r: " .. msg)
-end
-
-SlashCmdList.DYINGDOWNTHEHOUSE = function(msg)
+SlashCmdList.DYEINGDOWNTHEHOUSE = function(msg)
 	local cmd, rest = msg:lower():match("^(%S*)%s*(.-)$")
 	-- The search term needs its original case preserved for display, so re-derive
 	-- it from the untouched message rather than the lowercased copy.
 	local _, rawRest = msg:match("^(%S*)%s*(.-)$")
 
 	if cmd == "lock" then
-		DyingDownTheHouseDB.ui.locked = true
+		DyeingDownTheHouseDB.ui.locked = true
 		Print("frame locked.")
 	elseif cmd == "unlock" then
-		DyingDownTheHouseDB.ui.locked = false
+		DyeingDownTheHouseDB.ui.locked = false
 		Print("frame unlocked — drag it anywhere.")
 	elseif cmd == "reset" then
-		DyingDownTheHouseDB.ui.point, DyingDownTheHouseDB.ui.relPoint = "CENTER", "CENTER"
-		DyingDownTheHouseDB.ui.x, DyingDownTheHouseDB.ui.y, DyingDownTheHouseDB.ui.scale = 0, 0, 1.0
+		DyeingDownTheHouseDB.ui.point, DyeingDownTheHouseDB.ui.relPoint = "CENTER", "CENTER"
+		DyeingDownTheHouseDB.ui.x, DyeingDownTheHouseDB.ui.y, DyeingDownTheHouseDB.ui.scale = 0, 0, 1.0
 		if ns.RestorePosition then ns.RestorePosition() end
 		Print("position reset.")
 	elseif cmd == "hidezero" then
-		DyingDownTheHouseDB.ui.hideZero = not DyingDownTheHouseDB.ui.hideZero
+		DyeingDownTheHouseDB.ui.hideZero = not DyeingDownTheHouseDB.ui.hideZero
 		ns.Refresh()
-		Print("rows with zero dye are now " .. (DyingDownTheHouseDB.ui.hideZero and "hidden" or "shown") .. ".")
+		Print("rows with zero dye are now " .. (DyeingDownTheHouseDB.ui.hideZero and "hidden" or "shown") .. ".")
 	elseif cmd == "search" or cmd == "find" then
 		ns.SetSearch(rawRest)
 		if rawRest == "" then
@@ -1383,11 +1690,31 @@ SlashCmdList.DYINGDOWNTHEHOUSE = function(msg)
 		else
 			Print("usage: /dye sort <alpha | price | owned>")
 		end
+	elseif cmd == "expand" or cmd == "collapse" then
+		ns.SetAllColorsExpanded(cmd == "expand")
+		Print(cmd == "expand" and "all colors opened." or "all colors closed.")
 	elseif cmd == "options" or cmd == "config" then
 		if ns.OpenOptions then ns.OpenOptions() end
 	elseif cmd == "scan" then
 		local ok, err = ns.StartScan()
 		if not ok then Print(err or "cannot scan right now.") end
+	elseif cmd == "source" then
+		if rest == "" then
+			local current = ns.GetPriceSource and ns.GetPriceSource() or "auto"
+			local using = ns.ResolvePriceSource and select(1, ns.ResolvePriceSource())
+			Print(("price source: %s%s"):format(current,
+				(current == "auto" and using) and (" (using " .. using.name .. ")") or ""))
+			print("  available:")
+			for _, s in ipairs(ns.GetAvailablePriceSources and ns.GetAvailablePriceSources() or {}) do
+				print(("    %s — %s"):format(s.key, s.name))
+			end
+			print("  /dye source <auto | tsm | auctionator | blizzard>")
+		elseif ns.SetPriceSource and ns.SetPriceSource(rest) then
+			local using = select(1, ns.ResolvePriceSource())
+			Print(("price source set to %s (using %s)."):format(rest, using.name))
+		else
+			Print("unknown source. Try: auto, tsm, auctionator, blizzard")
+		end
 	elseif cmd == "chars" then
 		Print("characters contributing to the totals:")
 		for _, c in ipairs(ns.GetScanInfo().chars) do
@@ -1400,7 +1727,7 @@ SlashCmdList.DYINGDOWNTHEHOUSE = function(msg)
 			Print("usage: /dye forget <Name-Realm> (see /dye chars)")
 		else
 			local target
-			for ck in pairs(DyingDownTheHouseDB.chars) do
+			for ck in pairs(DyeingDownTheHouseDB.chars) do
 				if ck:lower() == rest then target = ck end
 			end
 			if not target then
@@ -1408,7 +1735,7 @@ SlashCmdList.DYINGDOWNTHEHOUSE = function(msg)
 			elseif target == ns.GetCharKey() then
 				Print("can't forget the character you're logged into.")
 			else
-				DyingDownTheHouseDB.chars[target] = nil
+				DyeingDownTheHouseDB.chars[target] = nil
 				ns.Refresh()
 				Print("forgot " .. target .. ".")
 			end
@@ -1416,12 +1743,14 @@ SlashCmdList.DYINGDOWNTHEHOUSE = function(msg)
 	elseif cmd == "help" then
 		Print("commands:")
 		print("  /dye — toggle the window")
-		print("  /dye search <text> — filter by dye name or colour family (blank clears)")
+		print("  /dye search <text> — filter by dye name or color family (blank clears)")
 		print("  /dye sort <alpha | price | owned> — change the order")
-		print("  /dye scan — price the dyes from the auction house (at the AH)")
+		print("  /dye scan — price the dyes from your chosen price source")
+		print("  /dye source [auto|tsm|auctionator|blizzard] — where prices come from")
+		print("  /dye expand | collapse — open or close every color group")
 		print("  /dye hidezero — toggle hiding dyes you have none of")
 		print("  /dye lock | unlock — freeze or free the frame")
-		print("  /dye reset — recentre the frame")
+		print("  /dye reset — recenter the frame")
 		print("  /dye options — open the settings panel")
 		print("  /dye chars — list characters and when they were last scanned")
 		print("  /dye forget <Name-Realm> — drop a deleted character's data")
@@ -1431,6 +1760,6 @@ SlashCmdList.DYINGDOWNTHEHOUSE = function(msg)
 end
 
 -- Addon Compartment (the button on the minimap's addon list).
-function DyingDownTheHouse_OnAddonCompartmentClick()
+function DyeingDownTheHouse_OnAddonCompartmentClick()
 	if ns.Toggle then ns.Toggle() end
 end

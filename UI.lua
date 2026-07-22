@@ -3,12 +3,24 @@ local ADDON, ns = ...
 --------------------------------------------------------------------------------
 -- UI.lua — the on-screen window.
 --
--- A movable, resizable window listing the dyes. Columns, left to right:
---   Dye | Owned | Pigment | Flowers | Value | Goal
--- "Pigment" and "Flowers" are the two halves of craftable-now (dyes you can make
--- from pigments you hold, vs by milling the flowers you hold). Every column except
--- Dye and Owned can be hidden from the options panel; hidden columns reflow away.
--- Clickable headers sort (and toggle direction). All data comes from Core.
+-- A movable, resizable window with two tabs, because there are two different
+-- questions and they want different columns:
+--
+--   By Color Family   Color | Pigment | Flowers | Makeable | Short
+--                     One row per family. Pigments and flowers belong to a COLOR,
+--                     not a dye — every black dye mills from the same flowers and
+--                     draws on the same pigment pile — so they're stated once here.
+--                     Opens onto that family's flowers.
+--
+--   By Dye            Dye | Have | Pigment | Flowers | Value | Dye Needed
+--                     The flat per-dye list, for "how am I doing on THIS dye".
+--                     Its Pigment/Flowers columns necessarily repeat down every dye
+--                     of a family; the family tab exists so you don't have to read
+--                     them that way. Opens onto one dye's flowers.
+--
+-- Optional columns (dye tab) can be hidden from the options panel; hidden columns
+-- reflow away. Clickable headers sort — dyes on one tab, families on the other.
+-- All data comes from Core.
 --------------------------------------------------------------------------------
 
 local ROW_H   = 22
@@ -20,24 +32,51 @@ local HEIGHT_MIN, HEIGHT_MAX = 200, 900
 -- Dye-name column can't balloon. Both bounds ride the fit width, so they shift as
 -- columns are shown/hidden and the window can never scale out of control.
 local WIDTH_SHRINK, WIDTH_GROW = 60, 240
-local TOP_INSET = 96
+local TOP_INSET = 120
 local BOT_INSET = 14
 local COLLAPSED_H = 34   -- height of the title-bar strip when collapsed
 local ROW_RIGHT = -30          -- a row's right edge, in frame-right coordinates
 local GAP, MARGIN = 8, 6
 
--- Fixed-width columns, right of the flexible Dye column. `sort` is the Core sort
--- mode; `optional` columns can be hidden. Packed right-to-left in ORDER_R2L.
+-- Two views, two column sets.
+--
+--   dye     the flat per-dye list — "how am I doing on THIS dye"
+--   family  one row per color family — "what can I make, and out of what"
+--
+-- They can't share a table. Pigment and Flowers belong to a COLOR, so on the dye tab
+-- they repeat identically down every dye of a family; on the family tab they're the
+-- whole point and are stated once. Forcing both into one grid is what made the
+-- numbers look like separate stockpiles.
 local COLDEF = {
-	owned   = { header = "Have",    sort = "owned",     w = 44 },
-	pigment = { header = "Pigment", sort = "craftpig",  w = 62, optional = true,
-		hint = "Pigments of this color you hold, and in ( ) how many of this dye they'd make." },
-	flowers = { header = "Flowers", sort = "craftherb", w = 66, optional = true,
-		hint = "Flowers of this color you hold, and in ( ) how many of this dye they'd mill into." },
-	value   = { header = "Value",   sort = "price",     w = 72, optional = true },
-	goal    = { header = "Dye Needed", sort = "goal",   w = 68, optional = true },
+	-- dye tab
+	owned   = { header = "Have",    sort = "owned",     w = 44, tab = "dye" },
+	pigment = { header = "Pigment", sort = "craftpig",  w = 62, tab = "dye", optional = true,
+		hint = "Pigments of this color you hold, and in ( ) how many of this dye they'd make.\nShared by every dye of the color — see the By Color Family tab." },
+	flowers = { header = "Flowers", sort = "craftherb", w = 66, tab = "dye", optional = true,
+		hint = "Flowers of this color you hold, and in ( ) how many of this dye they'd mill into.\nShared by every dye of the color — see the By Color Family tab." },
+	value   = { header = "Value",   sort = "price",     w = 72, tab = "dye", optional = true },
+	goal    = { header = "Dye Needed", sort = "goal",   w = 68, tab = "dye", optional = true },
+
+	-- family tab. Fixed set: each one is the reason this view exists, so none of them
+	-- is optional. `groupSort` marks them as sorting GROUPS rather than dyes.
+	gPigment  = { header = "Pigment",  groupSort = "pigment",  w = 62, tab = "family",
+		hint = "Pigments of this color the account holds." },
+	gFlowers  = { header = "Flowers",  groupSort = "flowers",  w = 66, tab = "family",
+		hint = "Flowers of this color the account holds, across every dye in the family." },
+	gMakeable = { header = "Makeable", groupSort = "makeable", w = 70, tab = "family",
+		hint = "Dyes of this color you could make right now: pigment in hand, plus what\nyour flowers would mill into. Ten of the SAME flower make one pigment." },
+	gShort    = { header = "Short",    groupSort = "short",    w = 48, tab = "family",
+		hint = "Dyes in this family still under their goal." },
 }
-local ORDER_R2L = { "goal", "value", "flowers", "pigment", "owned" }
+local ORDER_BY_TAB = {
+	dye    = { "goal", "value", "flowers", "pigment", "owned" },
+	family = { "gShort", "gMakeable", "gFlowers", "gPigment" },
+}
+
+-- The columns of the active tab, right to left.
+local function ActiveOrder()
+	return ORDER_BY_TAB[ns.GetTab and ns.GetTab() or "family"] or ORDER_BY_TAB.family
+end
 
 local SWATCH = {
 	black  = { 0.32, 0.32, 0.34 }, blue   = { 0.25, 0.45, 0.95 },
@@ -48,12 +87,13 @@ local SWATCH = {
 }
 local ACCENT = { 0.70, 0.53, 1.00 }
 
--- Shared with Options.lua so its dye list can show matching colour swatches.
+-- Shared with Options.lua so its dye list can show matching color swatches.
 ns.SWATCH = SWATCH
 ns.ACCENT = ACCENT
 
 local frame, scroll, scrollBar, rows, searchBox, titleFS
 local headers = {}
+local tabButtons -- { family = btn, dye = btn }, each with :SetActive(bool)
 local layout = {}
 local sepCount = 0   -- how many column dividers are currently visible (per dye row)
 local visible = 12
@@ -68,11 +108,20 @@ local function ShortAge(ts)
 	return math.floor(d / 86400) .. "d"
 end
 
+-- The price source a scan would use right now, or nil if Prices.lua isn't loaded
+-- (in which case Core's AH scan is all there is and the button behaves as it always
+-- did). Resolved fresh each time: the player can install or unload TSM mid-session.
+local function ActivePriceSource()
+	if not ns.ResolvePriceSource then return nil end
+	local ok, source = pcall(ns.ResolvePriceSource)
+	return ok and source or nil
+end
+
 -- Rainbow or plain title, per the ui.rainbowTitle toggle. Exposed so the options
 -- checkbox can re-apply it live.
 function ns.ApplyTitleColor()
 	if not titleFS then return end
-	if DyingDownTheHouseDB.ui.rainbowTitle then
+	if DyeingDownTheHouseDB.ui.rainbowTitle then
 		titleFS:SetText(ns.RainbowText("Dyeing Down The House"))
 	else
 		titleFS:SetText("Dyeing Down The House")
@@ -86,7 +135,7 @@ end
 
 local function ColShown(key)
 	if not COLDEF[key].optional then return true end
-	return DyingDownTheHouseDB.ui.cols[key] ~= false
+	return DyeingDownTheHouseDB.ui.cols[key] ~= false
 end
 
 -- The window width is DERIVED from which columns are shown, never dragged: a base
@@ -96,7 +145,8 @@ end
 local BASE_W = 300
 local function ComputeFrameWidth()
 	local w = BASE_W
-	for _, key in ipairs(ORDER_R2L) do
+	for _, key in ipairs(ActiveOrder()) do
+		-- "owned" is folded into BASE_W as the always-present first data column.
 		if key ~= "owned" and ColShown(key) then
 			w = w + COLDEF[key].w + GAP
 		end
@@ -157,9 +207,14 @@ local function ShowRowTooltip(row)
 	GameTooltip:AddLine((SwatchIcon(rc.color) .. " color family: " .. rc.color), 0.8, 0.8, 0.8)
 	GameTooltip:AddDoubleLine("Owned", rc.owned, 0.8, 0.8, 0.8, 1, 1, 1)
 	if rc.goal > 0 then GameTooltip:AddDoubleLine("Needed", rc.goal, 0.8, 0.8, 0.8, 1, 1, 1) end
-	GameTooltip:AddDoubleLine("Pigments held", ("%d (%d dyes)"):format(rc.ownedPigments, rc.craftableFromPigments), 0.8, 0.8, 0.8, 0.6, 0.9, 0.6)
-	GameTooltip:AddDoubleLine("Flowers held", ("%d (%d dyes)"):format(rc.ownedHerbs, rc.craftableFromHerbs), 0.8, 0.8, 0.8, 0.6, 0.9, 0.6)
-	GameTooltip:AddDoubleLine("Total craftable now", rc.craftableNow, 0.8, 0.8, 0.8, 0.5, 1, 0.5)
+	-- Explicitly flagged as the family's, not this dye's. These numbers are identical
+	-- for every dye of the color, and presenting them unlabeled was what made six
+	-- black rows look like six separate stockpiles.
+	GameTooltip:AddLine(" ")
+	GameTooltip:AddLine(("Shared by every %s dye:"):format(rc.color), 0.7, 0.7, 0.7)
+	GameTooltip:AddDoubleLine("   Pigments held", rc.ownedPigments, 0.8, 0.8, 0.8, 1, 1, 1)
+	GameTooltip:AddDoubleLine("   Flowers held", ("%d (%d more pigment)"):format(rc.ownedHerbs, rc.craftableFromHerbs), 0.8, 0.8, 0.8, 0.6, 0.9, 0.6)
+	GameTooltip:AddDoubleLine("   Makeable now", rc.craftableNow, 0.8, 0.8, 0.8, 0.5, 1, 0.5)
 	if rc.goal > 0 and rc.shortfall > 0 then
 		if rc.canCraftGoal then
 			GameTooltip:AddLine(("Craft %d more to reach it"):format(rc.shortfall), 0.4, 0.9, 0.4)
@@ -167,6 +222,51 @@ local function ShowRowTooltip(row)
 			GameTooltip:AddLine(("Short %d pigment (%d flowers)"):format(rc.pigmentsShort, rc.herbsShort), 0.95, 0.6, 0.3)
 		end
 	end
+	GameTooltip:Show()
+end
+
+-- The color header's tooltip. This is where the shared-pool story gets told
+-- properly: what the family holds, and which of its flowers are also feeding some
+-- other color — the contention the old per-dye columns actively obscured.
+local function ShowColorTooltip(row)
+	local color = row.color
+	if not color then return end
+	local supply = ns.GetColorSupply(color)
+
+	GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+	GameTooltip:AddLine(SwatchIcon(color) .. " " .. color:gsub("^%l", string.upper),
+		ACCENT[1], ACCENT[2], ACCENT[3])
+	GameTooltip:AddLine("One pigment pile and one flower pool, shared by every dye in this family.",
+		0.7, 0.7, 0.7, true)
+	GameTooltip:AddDoubleLine("Pigments held", supply.ownedPigments, 0.8, 0.8, 0.8, 1, 1, 1)
+	GameTooltip:AddDoubleLine("Flowers held",
+		("%d (%d more pigment)"):format(supply.ownedHerbs, supply.pigmentsFromHerbs),
+		0.8, 0.8, 0.8, 0.6, 0.9, 0.6)
+	GameTooltip:AddDoubleLine("Dyes makeable now", supply.makeablePigments, 0.8, 0.8, 0.8, 0.5, 1, 0.5)
+
+	-- Flowers that mill into more than one family. Spending them here denies them
+	-- there, which is the one thing a per-color view could otherwise hide.
+	local shared = {}
+	for _, herb in ipairs(supply.herbs) do
+		if herb.have > 0 and #(herb.colors or {}) > 1 then shared[#shared + 1] = herb end
+	end
+	if #shared > 0 then
+		GameTooltip:AddLine(" ")
+		GameTooltip:AddLine("Flowers also wanted elsewhere:", 0.95, 0.8, 0.4)
+		for i = 1, math.min(#shared, 5) do
+			local herb = shared[i]
+			local others = {}
+			for _, c in ipairs(herb.colors) do
+				if c ~= color then others[#others + 1] = c end
+			end
+			GameTooltip:AddLine(("   %s x%d — also %s"):format(herb.name, herb.have,
+				table.concat(others, ", ")), 0.8, 0.8, 0.8)
+		end
+		if #shared > 5 then
+			GameTooltip:AddLine(("   ...and %d more"):format(#shared - 5), 0.6, 0.6, 0.6)
+		end
+	end
+
 	GameTooltip:Show()
 end
 
@@ -180,9 +280,32 @@ local function CreateRow(index)
 	row:SetPoint("TOPLEFT", 2, -((index - 1) * ROW_H))
 	row:SetPoint("TOPRIGHT", -2, -((index - 1) * ROW_H))
 
-	local hl = row:CreateTexture(nil, "HIGHLIGHT")
-	hl:SetAllPoints()
-	hl:SetColorTexture(1, 1, 1, 0.06)
+	row.hl = row:CreateTexture(nil, "HIGHLIGHT")
+	row.hl:SetAllPoints()
+	row.hl:SetColorTexture(1, 1, 1, 0.06)
+
+	-- Expanded-block chrome -------------------------------------------------
+	-- An expanded flower list has no columns, so against a row that does it reads as
+	-- a row whose columns have gone wrong. These give the block its own container:
+	-- a faint fill (shared with the opened row above it, so the two read as one
+	-- panel), a color stripe down the left tying it to the family it belongs to, and
+	-- a hairline closing the bottom.
+	row.bg = row:CreateTexture(nil, "BACKGROUND")
+	row.bg:SetAllPoints()
+	row.bg:SetColorTexture(1, 1, 1, 0.035)
+	row.bg:Hide()
+
+	row.stripe = row:CreateTexture(nil, "BORDER")
+	row.stripe:SetPoint("TOPLEFT", row, "TOPLEFT", 8, 0)
+	row.stripe:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 8, 0)
+	row.stripe:SetWidth(2)
+	row.stripe:Hide()
+
+	row.capBottom = row:CreateTexture(nil, "BORDER")
+	row.capBottom:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 8, 0)
+	row.capBottom:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -6, 0)
+	row.capBottom:SetHeight(1)
+	row.capBottom:Hide()
 
 	-- Dye-mode widgets ------------------------------------------------------
 	row.expander = row:CreateTexture(nil, "OVERLAY")
@@ -194,9 +317,9 @@ local function CreateRow(index)
 	row.swatch:SetPoint("LEFT", 20, 0)
 
 	row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	row.name:SetPoint("LEFT", row.swatch, "RIGHT", 8, 0)
 	row.name:SetJustifyH("LEFT")
 	row.name:SetWordWrap(false)
+
 
 	row.cells = {}
 	for key in pairs(COLDEF) do
@@ -230,7 +353,7 @@ local function CreateRow(index)
 	-- Flower-mode widgets (shown when the row is a flower sub-row) -----------
 	row.fIcon = row:CreateTexture(nil, "ARTWORK")
 	row.fIcon:SetSize(14, 14)
-	row.fIcon:SetPoint("LEFT", 28, 0)
+	row.fIcon:SetPoint("LEFT", 32, 0) -- clear of the block's left stripe
 	row.fName = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	row.fName:SetPoint("LEFT", row.fIcon, "RIGHT", 6, 0)
 	row.fName:SetJustifyH("LEFT") -- no fixed width, so the detail hugs the name
@@ -243,7 +366,7 @@ local function CreateRow(index)
 	-- Column dividers live ON the row (one per column boundary) so they only show
 	-- on dye rows — the expanded flower rows stay clean, no lines through them.
 	row.seps = {}
-	for i = 1, #ORDER_R2L do
+	for i = 1, math.max(#ORDER_BY_TAB.dye, #ORDER_BY_TAB.family) do
 		local s = row:CreateTexture(nil, "ARTWORK")
 		s:SetColorTexture(1, 1, 1, 0.07)
 		s:SetWidth(1)
@@ -252,33 +375,107 @@ local function CreateRow(index)
 
 	row:RegisterForClicks("LeftButtonUp")
 	row:SetScript("OnClick", function()
-		if row.entryKind == "dye" and row.dyeKey then
-			local ex = DyingDownTheHouseDB.ui.expanded
+		-- Color rows open their family's flowers; dye rows (dye tab only) open their
+		-- own. Same gesture, and on each tab it opens the thing that view is about.
+		if row.entryKind == "color" and row.color then
+			ns.ToggleColor(row.color)
+			ResetScroll()
+		elseif row.entryKind == "dye" and row.dyeKey and ns.GetTab() == "dye" then
+			local ex = DyeingDownTheHouseDB.ui.expanded
 			ex[row.dyeKey] = (not ex[row.dyeKey]) or nil
 			ns.Refresh()
 		end
 	end)
-	row:SetScript("OnEnter", function() if row.entryKind == "dye" then ShowRowTooltip(row) end end)
+	row:SetScript("OnEnter", function()
+		if row.entryKind == "dye" then
+			ShowRowTooltip(row)
+		elseif row.entryKind == "color" then
+			ShowColorTooltip(row)
+		end
+	end)
 	row:SetScript("OnLeave", GameTooltip_Hide)
 
 	return row
 end
 
--- Show the dye-mode widgets (respecting which columns are visible), hide flower.
-local function SetDyeMode(row)
+-- The three row shapes. Each one owns the name's anchors outright, because the
+-- color header hugs its name to leave room for the summary while a dye row runs its
+-- name out to the first data column.
+
+-- A color family: expander, swatch, color name, then the family's own columns.
+-- These are real cells in the laid-out grid, not a run-on line of text, so they line
+-- up under their headers the way the dye tab's numbers do.
+local BLOCK_FILL = 0.035 -- the expanded panel's tint
+local BLOCK_HEAD = 0.055 -- the opened row itself, a touch stronger
+
+-- Reset the expanded-block chrome, then tint the row if it's the head of an open
+-- block so the panel appears to start at the row you clicked.
+local function ClearBlockChrome(row, open)
+	row.stripe:Hide(); row.capBottom:Hide()
+	row.hl:SetAlpha(1)
+	if open then
+		row.bg:SetColorTexture(1, 1, 1, BLOCK_HEAD)
+		row.bg:Show()
+	else
+		row.bg:Hide()
+	end
+end
+
+local function SetColorMode(row, open)
+	ClearBlockChrome(row, open)
 	row.expander:Show(); row.swatch:Show(); row.name:Show()
+	row.name:ClearAllPoints()
+	row.name:SetWidth(0)
+	row.name:SetPoint("LEFT", row.swatch, "RIGHT", 8, 0)
+	row.name:SetPoint("RIGHT", row, "RIGHT", layout.name_r or -180, 0)
+	for key, fs in pairs(row.cells) do fs:SetShown(layout[key] ~= nil) end
+	row.goalBox:Hide(); row.goalCheck:Hide()
+	for i, s in ipairs(row.seps) do s:SetShown(i <= sepCount) end
+	row.fIcon:Hide(); row.fName:Hide(); row.fDetail:Hide()
+end
+
+-- One dye. On the family tab it never appears; on the dye tab it's the whole list,
+-- with an expander for its own flowers.
+local function SetDyeMode(row, indented, open)
+	ClearBlockChrome(row, open)
+	row.expander:SetShown(not indented)
+	row.swatch:SetShown(not indented)
+	row.name:Show()
+	row.name:ClearAllPoints()
+	row.name:SetWidth(0) -- released, so the RIGHT anchor governs again
+	if indented then
+		row.name:SetPoint("LEFT", row, "LEFT", 30, 0)
+	else
+		row.name:SetPoint("LEFT", row.swatch, "RIGHT", 8, 0)
+	end
+	row.name:SetPoint("RIGHT", row, "RIGHT", layout.name_r or -180, 0)
 	for key, fs in pairs(row.cells) do fs:SetShown(layout[key] ~= nil) end
 	row.goalBox:SetShown(layout.goal ~= nil)
 	for i, s in ipairs(row.seps) do s:SetShown(i <= sepCount) end
 	row.fIcon:Hide(); row.fName:Hide(); row.fDetail:Hide()
 end
 
-local function SetFlowerMode(row)
+-- `color` tints the block's stripe to the family the flowers belong to; `last` closes
+-- the bottom edge, so a run of flower rows reads as one panel hanging off the row
+-- above rather than as more list items with broken columns.
+local function SetFlowerMode(row, color, last)
 	row.expander:Hide(); row.swatch:Hide(); row.name:Hide()
 	for _, fs in pairs(row.cells) do fs:Hide() end
 	row.goalBox:Hide(); row.goalCheck:Hide()
+	-- No column dividers: this block has no columns, and drawing them here is exactly
+	-- what made the layout look broken.
 	for _, s in ipairs(row.seps) do s:Hide() end
 	row.fIcon:Show(); row.fName:Show(); row.fDetail:Show()
+
+	row.bg:SetColorTexture(1, 1, 1, BLOCK_FILL)
+	row.bg:Show()
+	local sw = SWATCH[color] or { 0.55, 0.55, 0.6 }
+	row.stripe:SetColorTexture(sw[1], sw[2], sw[3], 0.8)
+	row.stripe:Show()
+	row.capBottom:SetColorTexture(1, 1, 1, 0.22)
+	row.capBottom:SetShown(last and true or false)
+	-- Nothing happens when you click a flower, so don't imply otherwise.
+	row.hl:SetAlpha(0)
 end
 
 --------------------------------------------------------------------------------
@@ -292,7 +489,7 @@ function ns.ApplyColumnLayout()
 	layout = {}
 	local bounds = {}
 	local x = -MARGIN
-	for _, key in ipairs(ORDER_R2L) do
+	for _, key in ipairs(ActiveOrder()) do
 		if ColShown(key) then
 			local w = COLDEF[key].w
 			layout[key] = { r = x, w = w }
@@ -304,9 +501,11 @@ function ns.ApplyColumnLayout()
 	layout.name_r = x
 	sepCount = #bounds
 
-	-- Position row cells and the per-row column dividers.
+	-- Position row cells and the per-row column dividers. The name is deliberately
+	-- NOT anchored here: each row mode anchors it differently (a color header hugs
+	-- its name to leave room for the summary), so they own it and read layout.name_r
+	-- for themselves.
 	for _, row in ipairs(rows) do
-		row.name:SetPoint("RIGHT", row, "RIGHT", layout.name_r, 0)
 		for key, def in pairs(COLDEF) do
 			local L = layout[key]
 			local widget = (key == "goal") and row.goalBox or row.cells[key]
@@ -344,7 +543,7 @@ function ns.ApplyColumnLayout()
 		local L = layout[key]
 		if L then
 			h:ClearAllPoints()
-			h:SetPoint("TOPRIGHT", frame, "TOPRIGHT", L.r + ROW_RIGHT, -72)
+			h:SetPoint("TOPRIGHT", frame, "TOPRIGHT", L.r + ROW_RIGHT, -96)
 			h:SetWidth(L.w)
 			h:Show()
 		else
@@ -355,11 +554,11 @@ function ns.ApplyColumnLayout()
 	-- Set the width bounds from the current column-fit width, then apply the user's
 	-- saved width clamped into them (so hiding a column pulls an over-wide window in,
 	-- and showing one pushes a too-narrow window out). Untouched while collapsed.
-	if not DyingDownTheHouseDB.ui.collapsed then
+	if not DyeingDownTheHouseDB.ui.collapsed then
 		local fit = ComputeFrameWidth()
 		local minW, maxW = fit - WIDTH_SHRINK, fit + WIDTH_GROW
 		if frame.SetResizeBounds then frame:SetResizeBounds(minW, HEIGHT_MIN, maxW, HEIGHT_MAX) end
-		local ui = DyingDownTheHouseDB.ui
+		local ui = DyeingDownTheHouseDB.ui
 		local w = math.max(minW, math.min(maxW, ui.width or fit))
 		ui.width = w
 		frame:SetWidth(w)
@@ -378,9 +577,9 @@ local function Layout()
 	end
 end
 
--- The Pigment/Flowers columns read "held (dyes craftable)": how many of that
--- colour's pigment / flowers the account holds, and in parentheses how many of
--- THIS dye that stock could produce right now.
+-- The dye tab's Pigment/Flowers cells read "held (dyes craftable)": how many of that
+-- color's pigment / flowers the account holds, and in parentheses how many of THIS
+-- dye that stock could produce right now.
 local function HeldCell(held, dyes)
 	local text = ("%d (%d)"):format(held, dyes)
 	if dyes > 0 then return text, 0.65, 0.95, 0.65 end   -- can make some now
@@ -404,21 +603,54 @@ local function CellValue(key, dye, rc)
 	end
 end
 
+-- The family tab's cells. One family per row, so these are plain counts — no
+-- parenthetical, because there's no individual dye to relate them to.
+local function GroupCellValue(key, group)
+	if key == "gPigment" then
+		local n = group.pigment
+		return n, n > 0 and 1 or 0.45, n > 0 and 1 or 0.45, n > 0 and 1 or 0.45
+	elseif key == "gFlowers" then
+		local n = group.flowers
+		return n, n > 0 and 1 or 0.45, n > 0 and 1 or 0.45, n > 0 and 1 or 0.45
+	elseif key == "gMakeable" then
+		local n = group.makeable
+		if n > 0 then return n, 0.5, 0.87, 0.5 end
+		return n, 0.45, 0.45, 0.45
+	elseif key == "gShort" then
+		-- Blank rather than "0": a family you're on top of should be quiet, so the
+		-- ones needing work are the only thing in that column.
+		if (group.short or 0) == 0 then return "", 0.45, 0.45, 0.45 end
+		return group.short, 0.91, 0.64, 0.24
+	end
+end
+
 function ns.Refresh()
 	-- Keep the Dye Crafting window's markers in sync even if our window is hidden.
 	if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end
 	if not frame or not frame:IsShown() then return end
 	-- Collapsed to the title bar: don't touch the list (it re-shows the scroll frame,
 	-- which would spill the rows out below the short bar on any bag/loot refresh).
-	if DyingDownTheHouseDB.ui.collapsed then return end
+	if DyeingDownTheHouseDB.ui.collapsed then return end
 
-	local sort, dir = ns.GetSort()
+	-- Each tab sorts a different thing — the dye list sorts dyes, the family list
+	-- sorts color families — so which sort a header reflects depends on the tab.
+	local family = (ns.GetTab() == "family")
+	local sort, dir
+	if family then sort, dir = ns.GetGroupSort() else sort, dir = ns.GetSort() end
+
+	if tabButtons then
+		for key, btn in pairs(tabButtons) do btn:SetActive(key == ns.GetTab()) end
+	end
+	if headers.name then
+		headers.name.label = family and "Color" or "Dye"
+	end
+
 	-- Sort caret is a real sprite (a scrollbar arrow atlas), tinted to the accent and
 	-- flipped 180° for descending. A rotatable Texture means one "up" atlas covers
 	-- both directions. Only clients missing the atlas fall back to an ASCII caret.
 	local fallback = (dir == "asc") and " ^" or " v"
 	for _, h in pairs(headers) do
-		local on = (h.sort == sort)
+		local on = ((family and h.groupSort or h.sort) == sort)
 		if h.arrow then
 			h.fs:SetText(h.label)
 			if on then
@@ -439,23 +671,42 @@ function ns.Refresh()
 		h.fs:SetTextColor(on and ACCENT[1] or 0.75, on and ACCENT[2] or 0.75, on and ACCENT[3] or 0.75)
 	end
 
-	-- Build the flat entry list: each visible dye (GetDisplayDyes already drops the
-	-- ones the player has hidden), plus its flower sub-rows when expanded.
-	local dyes = ns.GetDisplayDyes()
-	local expanded = DyingDownTheHouseDB.ui.expanded or {}
-	local hideCostly = DyingDownTheHouseDB.ui.hideCostlyFlowers
+	-- Build the flat entry list for whichever tab is on top.
+	local hideCostly = DyeingDownTheHouseDB.ui.hideCostlyFlowers
 	local entries = {}
-	for _, d in ipairs(dyes) do
-		entries[#entries + 1] = { kind = "dye", dye = d }
-		if expanded[d.key] then
-			local cb = ns.GetCraftBreakdown(d.key)
-			for _, fl in ipairs(cb and cb.flowers or {}) do
-				-- Optionally hide flowers that cost more to craft than to buy the dye.
-				-- (cheaperToCraft == false means dearer; nil means unknown — keep those.)
-				if not (hideCostly and fl.cheaperToCraft == false) then
-					entries[#entries + 1] = { kind = "flower", flower = fl }
-				end
+
+	-- Marks the ends of each expanded run so the UI can cap the block. Done here
+	-- rather than while drawing because the hideCostly filter decides which flower is
+	-- actually last.
+	local function AddFlowers(breakdown, color)
+		local from = #entries + 1
+		for _, fl in ipairs(breakdown and breakdown.flowers or {}) do
+			-- Optionally hide flowers that cost more to mill than the dye costs to buy.
+			-- (cheaperToCraft == false means dearer; nil means unknown — keep those.)
+			if not (hideCostly and fl.cheaperToCraft == false) then
+				entries[#entries + 1] = { kind = "flower", flower = fl, color = color }
 			end
+		end
+		if #entries >= from then
+			entries[from].first = true
+			entries[#entries].last = true
+		end
+	end
+
+	if ns.GetTab() == "family" then
+		-- One row per color, opening onto the flowers that family mills from. No dye
+		-- rows: this view is about the shared pool, and the dyes are a tab away.
+		for _, group in ipairs(ns.GetDisplayGroups()) do
+			local open = ns.IsColorExpanded(group.color)
+			entries[#entries + 1] = { kind = "color", group = group, color = group.color, open = open }
+			if open then AddFlowers(ns.GetColorCraftBreakdown(group.color), group.color) end
+		end
+	else
+		-- The flat per-dye list, each dye opening onto its own flowers.
+		local expanded = DyeingDownTheHouseDB.ui.expanded or {}
+		for _, dye in ipairs(ns.GetDisplayDyes()) do
+			entries[#entries + 1] = { kind = "dye", dye = dye, top = true, open = expanded[dye.key] }
+			if expanded[dye.key] then AddFlowers(ns.GetCraftBreakdown(dye.key), dye.color) end
 		end
 	end
 
@@ -477,7 +728,15 @@ function ns.Refresh()
 		if scanning then
 			frame.scanBtn:SetText("Scanning"); frame.scanBtn:Disable()
 		else
-			frame.scanBtn:SetText("Scan"); frame.scanBtn:SetEnabled(ns.IsAHOpen and ns.IsAHOpen())
+			-- Only the built-in AH scan needs an auction house. TSM and Auctionator read
+			-- a database they already keep, so the button stays live anywhere — and says
+			-- "Prices" rather than "Scan", because nothing is being scanned.
+			local source = ActivePriceSource()
+			if source and source.instant then
+				frame.scanBtn:SetText("Prices"); frame.scanBtn:Enable()
+			else
+				frame.scanBtn:SetText("Scan"); frame.scanBtn:SetEnabled(ns.IsAHOpen and ns.IsAHOpen())
+			end
 		end
 	end
 
@@ -490,21 +749,42 @@ function ns.Refresh()
 	for i = 1, MAXROWS do
 		local row = rows[i]
 		local e = (i <= visible) and entries[i + offset] or nil
-		if e and e.kind == "dye" then
-			local dye = e.dye
-			row.entryKind, row.dyeKey = "dye", dye.key
-			SetDyeMode(row)
-			row.expander:SetTexture(expanded[dye.key]
+		if e and e.kind == "color" then
+			row.entryKind, row.dyeKey, row.color = "color", nil, e.color
+			SetColorMode(row, e.open)
+			row.expander:SetTexture(e.open
 				and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
-			local sw = SWATCH[dye.color] or { 0.6, 0.6, 0.6 }
+			local sw = SWATCH[e.color] or { 0.6, 0.6, 0.6 }
 			row.swatch:SetColorTexture(sw[1], sw[2], sw[3])
+			row.name:SetText(e.color:gsub("^%l", string.upper))
+			row.name:SetTextColor(1, 0.82, 0)
+			for key, fs in pairs(row.cells) do
+				if layout[key] then
+					local text, r, g, b = GroupCellValue(key, e.group)
+					if text ~= nil then fs:SetText(text); fs:SetTextColor(r, g, b) end
+				end
+			end
+			if GameTooltip:IsOwned(row) then ShowColorTooltip(row) end
+			row:Show()
+
+		elseif e and e.kind == "dye" then
+			local dye = e.dye
+			row.entryKind, row.dyeKey, row.color = "dye", dye.key, nil
+			SetDyeMode(row, not e.top, e.open)
+			if e.top then
+				row.expander:SetTexture(e.open
+					and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
+				local sw = SWATCH[dye.color] or { 0.6, 0.6, 0.6 }
+				row.swatch:SetColorTexture(sw[1], sw[2], sw[3])
+			end
 			row.name:SetText(dye.name)
+			row.name:SetTextColor(0.92, 0.92, 0.92)
 
 			local rc = ns.GetRecipeStatus(dye.key)
 			for key, fs in pairs(row.cells) do
 				if layout[key] then
 					local text, r, g, b = CellValue(key, dye, rc)
-					fs:SetText(text); fs:SetTextColor(r, g, b)
+					if text ~= nil then fs:SetText(text); fs:SetTextColor(r, g, b) end
 				end
 			end
 			if layout.goal and not row.goalBox:HasFocus() then
@@ -520,8 +800,8 @@ function ns.Refresh()
 
 		elseif e and e.kind == "flower" then
 			local fl = e.flower
-			row.entryKind, row.dyeKey = "flower", nil
-			SetFlowerMode(row)
+			row.entryKind, row.dyeKey, row.color = "flower", nil, nil
+			SetFlowerMode(row, e.color, e.last)
 			local icon = C_Item and C_Item.GetItemIconByID and fl.id and C_Item.GetItemIconByID(fl.id)
 			row.fIcon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
 			row.fName:SetText(fl.name)
@@ -529,7 +809,7 @@ function ns.Refresh()
 			local parts = { ("%d held"):format(fl.have),
 				("makes %d %s"):format(fl.dyesEach, fl.dyesEach == 1 and "dye" or "dyes") }
 			if fl.craftCost then
-				-- Colour the craft cost itself: green if cheaper to craft than buy,
+				-- Color the craft cost itself: green if cheaper to craft than buy,
 				-- red if dearer, default when there's no dye price to compare.
 				local craft = FormatMoney(fl.craftCost) .. " to craft"
 				if fl.cheaperToCraft == true then craft = "|cff66dd66" .. craft .. "|r"
@@ -540,7 +820,7 @@ function ns.Refresh()
 			row:Show()
 
 		else
-			row.entryKind, row.dyeKey = nil, nil
+			row.entryKind, row.dyeKey, row.color = nil, nil, nil
 			row:Hide()
 		end
 	end
@@ -550,7 +830,9 @@ end
 -- Headers
 --------------------------------------------------------------------------------
 
-local function MakeHeader(key, label, sortMode)
+-- `sortMode` sorts DYES, `groupMode` sorts color FAMILIES. The name header carries
+-- both, because it heads the dye list on one tab and the color list on the other.
+local function MakeHeader(key, label, sortMode, groupMode)
 	local btn = CreateFrame("Button", nil, frame)
 	btn:SetSize(COLDEF[key] and COLDEF[key].w or 120, 16)
 	btn.fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -559,6 +841,7 @@ local function MakeHeader(key, label, sortMode)
 	btn.fs:SetText(label)
 	btn.label = label
 	btn.sort = sortMode
+	btn.groupSort = groupMode
 	btn.leftJustified = (key == "name")
 	-- A real sprite for the sort caret (Refresh points it up or down).
 	local a = btn:CreateTexture(nil, "OVERLAY")
@@ -568,7 +851,14 @@ local function MakeHeader(key, label, sortMode)
 	a:Hide()
 	btn.arrow = a
 	btn.hint = COLDEF[key] and COLDEF[key].hint
-	btn:SetScript("OnClick", function() ns.CycleSort(sortMode); ResetScroll(); ns.Refresh() end)
+	btn:SetScript("OnClick", function()
+		if ns.GetTab() == "family" then
+			if groupMode then ns.CycleGroupSort(groupMode) end
+		elseif sortMode then
+			ns.CycleSort(sortMode)
+		end
+		ResetScroll(); ns.Refresh()
+	end)
 	btn:SetScript("OnEnter", function()
 		btn.fs:SetTextColor(1, 1, 1)
 		if btn.hint then
@@ -590,7 +880,7 @@ end
 function ns.BuildUI()
 	if frame then return end
 
-	frame = CreateFrame("Frame", "DyingDownTheHouseFrame", UIParent, "BackdropTemplate")
+	frame = CreateFrame("Frame", "DyeingDownTheHouseFrame", UIParent, "BackdropTemplate")
 	frame:SetBackdrop({
 		bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
 		edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
@@ -609,16 +899,16 @@ function ns.BuildUI()
 	frame:EnableMouse(true)
 	frame:RegisterForDrag("LeftButton")
 	frame:SetScript("OnDragStart", function(self)
-		if not DyingDownTheHouseDB.ui.locked then self:StartMoving() end
+		if not DyeingDownTheHouseDB.ui.locked then self:StartMoving() end
 	end)
 	frame:SetScript("OnDragStop", function(self)
 		self:StopMovingOrSizing()
 		local point, _, relPoint, x, y = self:GetPoint()
-		local ui = DyingDownTheHouseDB.ui
+		local ui = DyeingDownTheHouseDB.ui
 		ui.point, ui.relPoint, ui.x, ui.y = point, relPoint, x, y
 	end)
 	frame:SetScript("OnSizeChanged", function(self)
-		local ui = DyingDownTheHouseDB.ui
+		local ui = DyeingDownTheHouseDB.ui
 		if ui.collapsed then return end -- don't persist the title-bar height
 		ui.width, ui.height = self:GetWidth(), self:GetHeight()
 		Layout()
@@ -664,10 +954,18 @@ function ns.BuildUI()
 	end)
 	scanBtn:SetScript("OnEnter", function()
 		GameTooltip:SetOwner(scanBtn, "ANCHOR_BOTTOM")
-		GameTooltip:AddLine("Scan AH prices")
-		GameTooltip:AddLine("Open the Auction House, then Scan to price every shown dye and\nflower (lowest buyout with real market depth behind it).",
-			0.8, 0.8, 0.8, true)
-		local age = ShortAge(DyingDownTheHouseDB.lastScan)
+		local source = ActivePriceSource()
+		if source and source.instant then
+			GameTooltip:AddLine("Update prices")
+			GameTooltip:AddLine(("Reads every shown dye and flower straight from %s.\nNo auction house visit needed."):format(source.name),
+				0.8, 0.8, 0.8, true)
+		else
+			GameTooltip:AddLine("Scan AH prices")
+			GameTooltip:AddLine("Open the Auction House, then Scan to price every shown dye and\nflower (lowest buyout with real market depth behind it).",
+				0.8, 0.8, 0.8, true)
+			GameTooltip:AddLine("Run TSM or Auctionator? /dye source lets you read their prices\ninstead, instantly and anywhere.", 0.6, 0.6, 0.7, true)
+		end
+		local age = ShortAge(DyeingDownTheHouseDB.lastScan)
 		if age then
 			GameTooltip:AddLine(age == "now" and "Last scan: just now" or ("Last scan: " .. age .. " ago"),
 				0.6, 0.85, 0.6)
@@ -721,20 +1019,75 @@ function ns.BuildUI()
 	end)
 
 	-- Headers
-	local dyeHead = MakeHeader("name", "Dye", "alpha")
+	-- Tabs. Hand-built rather than PanelTabButtonTemplate: the stock tab art is sized
+	-- and tinted for Blizzard's parchment frames and reads badly on this dark one, and
+	-- a template rename in a future patch would take the whole window with it.
+	do
+		local function MakeTab(key, label, anchor)
+			local btn = CreateFrame("Button", nil, frame)
+			btn:SetSize(112, 20)
+			if anchor then
+				btn:SetPoint("LEFT", anchor, "RIGHT", 4, 0)
+			else
+				btn:SetPoint("TOPLEFT", 14, -64)
+			end
+			btn.bg = btn:CreateTexture(nil, "BACKGROUND")
+			btn.bg:SetAllPoints()
+			btn.fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+			btn.fs:SetAllPoints()
+			btn.fs:SetJustifyH("CENTER")
+			btn.fs:SetText(label)
+			function btn:SetActive(active)
+				self.active = active
+				if active then
+					self.bg:SetColorTexture(ACCENT[1] * 0.35, ACCENT[2] * 0.30, ACCENT[3] * 0.45, 0.9)
+					self.fs:SetTextColor(1, 1, 1)
+				else
+					self.bg:SetColorTexture(1, 1, 1, 0.04)
+					self.fs:SetTextColor(0.62, 0.62, 0.66)
+				end
+			end
+			btn:SetScript("OnClick", function()
+				ns.SetTab(key)
+				-- The tabs have different columns and different row counts, so neither the
+				-- old layout nor the old scroll offset means anything on the new one.
+				ns.ApplyColumnLayout()
+				ResetScroll()
+				ns.Refresh()
+			end)
+			btn:SetScript("OnEnter", function(self)
+				if not self.active then self.fs:SetTextColor(0.9, 0.9, 0.9) end
+			end)
+			btn:SetScript("OnLeave", function(self) self:SetActive(self.active) end)
+			btn:SetActive(false)
+			return btn
+		end
+
+		tabButtons = {}
+		tabButtons.family = MakeTab("family", "By Color Family", nil)
+		tabButtons.dye = MakeTab("dye", "By Dye", tabButtons.family)
+	end
+
+	-- The leftmost header changes label with the tab (Dye / Color) and sorts whichever
+	-- list is showing.
+	local dyeHead = MakeHeader("name", "Dye", "alpha", "color")
 	dyeHead:ClearAllPoints()
-	dyeHead:SetPoint("TOPLEFT", 30, -72)
+	dyeHead:SetPoint("TOPLEFT", 30, -96)
 	dyeHead:SetWidth(120)
-	for _, key in ipairs(ORDER_R2L) do MakeHeader(key, COLDEF[key].header, COLDEF[key].sort) end
+	-- Every column of every tab gets a header; ApplyColumnLayout shows only the ones
+	-- the active tab lays out.
+	for key, def in pairs(COLDEF) do
+		MakeHeader(key, def.header, def.sort, def.groupSort)
+	end
 
 	-- Scroll + rows
-	scroll = CreateFrame("ScrollFrame", "DyingDownTheHouseScroll", frame, "FauxScrollFrameTemplate")
+	scroll = CreateFrame("ScrollFrame", "DyeingDownTheHouseScroll", frame, "FauxScrollFrameTemplate")
 	scroll:SetPoint("TOPLEFT", 10, -TOP_INSET)
 	scroll:SetPoint("BOTTOMRIGHT", -28, BOT_INSET)
 	scroll:SetScript("OnVerticalScroll", function(self, offset)
 		FauxScrollFrame_OnVerticalScroll(self, offset, ROW_H, ns.Refresh)
 	end)
-	scrollBar = _G["DyingDownTheHouseScrollScrollBar"] or scroll.ScrollBar
+	scrollBar = _G["DyeingDownTheHouseScrollScrollBar"] or scroll.ScrollBar
 
 	rows = {}
 	for i = 1, MAXROWS do rows[i] = CreateRow(i) end
@@ -746,23 +1099,24 @@ function ns.BuildUI()
 	grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
 	grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
 	grip:SetScript("OnMouseDown", function()
-		if not DyingDownTheHouseDB.ui.locked then frame:StartSizing("BOTTOMRIGHT") end
+		if not DyeingDownTheHouseDB.ui.locked then frame:StartSizing("BOTTOMRIGHT") end
 	end)
 	grip:SetScript("OnMouseUp", function()
 		frame:StopMovingOrSizing()
-		local ui = DyingDownTheHouseDB.ui
+		local ui = DyeingDownTheHouseDB.ui
 		ui.width, ui.height = frame:GetWidth(), frame:GetHeight()
 		Layout()
 		ns.Refresh()
 	end)
 
 	-- Everything hidden when collapsed to the title bar (headers handled separately).
-	frame.contentWidgets = { searchBox, sLabel, clear, opts, scanBtn, scroll, grip }
+	frame.contentWidgets = { searchBox, sLabel, clear, opts, scanBtn, scroll, grip,
+		tabButtons.family, tabButtons.dye }
 
 	ns.RestorePosition()
 	ns.ApplyColumnLayout()
 	Layout()
-	if DyingDownTheHouseDB.ui.collapsed then ns.SetCollapsed(true) end
+	if DyeingDownTheHouseDB.ui.collapsed then ns.SetCollapsed(true) end
 end
 
 --------------------------------------------------------------------------------
@@ -770,7 +1124,7 @@ end
 --------------------------------------------------------------------------------
 
 function ns.SetCollapsed(collapsed)
-	DyingDownTheHouseDB.ui.collapsed = collapsed and true or nil -- set first: OnSizeChanged skips saving
+	DyeingDownTheHouseDB.ui.collapsed = collapsed and true or nil -- set first: OnSizeChanged skips saving
 	if not frame then return end
 	for _, w in ipairs(frame.contentWidgets or {}) do if w then w:SetShown(not collapsed) end end
 	for _, h in pairs(headers) do h:SetShown(not collapsed) end
@@ -779,7 +1133,7 @@ function ns.SetCollapsed(collapsed)
 		if frame.scanFlavor then frame.scanFlavor:Hide() end
 	end
 	if frame.minBtn then frame.minBtn.fs:SetText(collapsed and "+" or "−") end
-	-- Centre the title in the short bar when collapsed; top-anchor it when expanded.
+	-- Center the title in the short bar when collapsed; top-anchor it when expanded.
 	if titleFS then
 		titleFS:ClearAllPoints()
 		if collapsed then
@@ -791,14 +1145,14 @@ function ns.SetCollapsed(collapsed)
 	if collapsed then
 		frame:SetHeight(COLLAPSED_H)
 	else
-		frame:SetHeight(DyingDownTheHouseDB.ui.height or 460)
+		frame:SetHeight(DyeingDownTheHouseDB.ui.height or 460)
 		Layout()
 		ns.Refresh()
 	end
 end
 
 function ns.ToggleCollapse()
-	ns.SetCollapsed(not DyingDownTheHouseDB.ui.collapsed)
+	ns.SetCollapsed(not DyeingDownTheHouseDB.ui.collapsed)
 end
 
 --------------------------------------------------------------------------------
@@ -807,7 +1161,7 @@ end
 
 function ns.RestorePosition()
 	if not frame then return end
-	local ui = DyingDownTheHouseDB.ui
+	local ui = DyeingDownTheHouseDB.ui
 	local fit = ComputeFrameWidth()
 	local w = math.max(fit - WIDTH_SHRINK, math.min(fit + WIDTH_GROW, ui.width or fit))
 	frame:SetSize(w, ui.height or 460)
@@ -819,7 +1173,7 @@ end
 
 function ns.Show()
 	if not frame then ns.BuildUI() end
-	DyingDownTheHouseDB.ui.shown = true
+	DyeingDownTheHouseDB.ui.shown = true
 	frame:Show()
 	Layout()
 	ns.Refresh()
@@ -827,7 +1181,7 @@ end
 
 function ns.Hide()
 	if frame then frame:Hide() end
-	if DyingDownTheHouseDB then DyingDownTheHouseDB.ui.shown = false end
+	if DyeingDownTheHouseDB then DyeingDownTheHouseDB.ui.shown = false end
 end
 
 function ns.Toggle()

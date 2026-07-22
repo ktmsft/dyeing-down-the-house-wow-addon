@@ -1,38 +1,40 @@
 local ADDON, ns = ...
 
 --------------------------------------------------------------------------------
--- !!! PLACEHOLDER DATA — NOT REAL GAME IDs !!!
+-- Data.lua — the dye, pigment and herb tables.
 --
--- These tables are intentionally EMPTY. The real dye/herb/pigment names and item
--- IDs must come from the player — this addon never guesses item IDs (a wrong ID
--- both mis-counts and can overwrite a real one when two items share a name).
+-- Every ID here was READ FROM THE GAME, never guessed. Dyes and their colors come
+-- from the Dye Crafting profession's own recipes (each dye's ID is the recipe
+-- output; its color is the pigment that recipe consumes); pigment and herb IDs were
+-- resolved in-game from their exact names. That matters because a wrong ID does two
+-- kinds of damage: it mis-counts, and it can overwrite a correct one when two items
+-- share a name across expansions. Anything unverified stays out.
 --
--- The schema below is what the pure-logic code and tests are written against.
--- Names known from the community chart + the in-game pigment list are recorded in
--- reference/pigment-dye-chart.md; they get baked in here once verified and once
--- item IDs exist.
---
--- The crafting chain, from the chart:  10 HERBS -> 1 PIGMENT -> 1 DYE
+-- The crafting chain:  10 HERBS -> 1 PIGMENT -> 1 DYE
 -- (milling herbs -> pigment needs Alchemy/Inscription; the Dye Station, found in
--- the Neighbourhood, converts pigment -> dye and also needs Alchemy/Inscription.)
--- Everything is grouped by COLOUR: one pigment per colour, many herbs per colour,
--- many dyes per colour. A herb can feed MORE THAN ONE colour (the chart's
--- overlaps), which is why herbs carry a list of colours.
+-- the Neighborhood, converts pigment -> dye and also needs Alchemy/Inscription.)
+-- Everything is grouped by COLOR: one pigment per color, many herbs per color, many
+-- dyes per color. A herb can feed MORE THAN ONE color, which is why herbs carry a
+-- list of colors rather than a single one — and why the flowers for a color are a
+-- pool shared by every dye in that family.
+--
+-- Cross-checked against the community pigment/dye chart in
+-- reference/pigment-dye-chart.md.
 --------------------------------------------------------------------------------
 
--- The ten dye colours. Order here is the default display order.
+-- The ten dye colors. Order here is the default display order.
 ns.COLORS = {
 	"black", "blue", "brown", "green", "orange",
 	"purple", "red", "teal", "white", "yellow",
 }
 
--- One pigment per colour. In game they are named "<Colour> Dye Pigment"
+-- One pigment per color. In game they are named "<Color> Dye Pigment"
 -- (e.g. "Black Dye Pigment").
 --
---   key    stable identifier — NEVER change; referenced by colour
+--   key    stable identifier — NEVER change; referenced by color
 --   name   exact in-game name
 --   id     retail item ID (number)
---   color  which colour bucket it belongs to
+--   color  which color bucket it belongs to
 --
 -- Names CONFIRMED from the in-game craft list; IDs resolved in-game from those
 -- names (2026-07-20). Six IDs were double-confirmed across two passes; the other
@@ -51,17 +53,18 @@ ns.PIGMENTS = {
 	{ key = "yellow_pigment", name = "Yellow Dye Pigment", id = 262648, color = "yellow" },
 }
 
--- Every herb. A herb mills into one or more colours' pigments.
+-- Every herb. A herb mills into one or more colors' pigments.
 --
 --   key     stable identifier
 --   name    exact in-game name
 --   id      retail item ID (number)
---   colors  list of colour keys this herb mills into (the chart's columns it sits in)
+--   colors  list of color keys this herb mills into (the chart's columns it sits in)
 --   expac   expansion label, tooltip only
 --
--- Example shape (fake id, overlapping herb):
---   { key = "deathblossom", name = "Death Blossom", id = 000101,
---     colors = { "black", "blue", "brown" }, expac = "Shadowlands" },
+-- Several herbs appear under more than one color (Writhebark feeds black, brown AND
+-- orange), and several have one entry per quality tier sharing a name. Both are
+-- deliberate: the tiers count separately because they're separate items, but they
+-- hide together in the options, by name.
 ns.HERBS = {
 	{ key = "adderstongue_36903",      name = "Adder's Tongue",      id = 36903, colors = { "brown", "green" } },
 	{ key = "akundasbite_152507",      name = "Akunda's Bite",       id = 152507, colors = { "blue" } },
@@ -161,15 +164,15 @@ ns.HERBS = {
 	{ key = "herb_79011", name = "Fool's Cap", id = 79011, colors = { "purple" } },
 }
 
--- Every dye. Each dye is made from one pigment of its colour.
+-- Every dye. Each dye is made from one pigment of its color.
 --
 --   key    stable identifier — referenced by goals and saved variables
 --   name   exact in-game name
 --   id     retail item ID (number)
---   color  the dye's colour (selects its pigment)
+--   color  the dye's color (selects its pigment)
 --
 -- Sourced authoritatively from the "Dye Crafting" profession recipes, read in-game
--- (2026-07-20): every dye's ID is the recipe output, and its colour is read from the
+-- (2026-07-20): every dye's ID is the recipe output, and its color is read from the
 -- pigment the recipe consumes — nothing guessed. 62 dyes.
 ns.DYES = {
 	-- black
