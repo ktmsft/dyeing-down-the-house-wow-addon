@@ -1322,10 +1322,17 @@ function ns.GetDisplayGroups()
 		if not dyes or #dyes == 0 or taken[color] then return end
 		taken[color] = true
 
+		-- DYES still needed, not dye types under goal. The unit matters: `short` sits
+		-- next to `makeable` in the family view, so the two have to be comparable —
+		-- "18 makeable, 33 short" says at a glance that this family's stock can't close
+		-- the gap. Counting types gave "18 makeable, 1 short", which reads as covered
+		-- and is the opposite of the truth.
 		local short = 0
 		for _, dye in ipairs(dyes) do
 			local goal = ns.GetGoal(dye.key)
-			if goal > 0 and ns.GetTotal(dye.key) < goal then short = short + 1 end
+			if goal > 0 then
+				short = short + math.max(0, goal - ns.GetTotal(dye.key))
+			end
 		end
 
 		local supply = ns.GetColorSupply(color)

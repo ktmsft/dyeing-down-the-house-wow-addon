@@ -65,8 +65,10 @@ local COLDEF = {
 		hint = "Flowers of this color the account holds, across every dye in the family." },
 	gMakeable = { header = "Makeable", groupSort = "makeable", w = 70, tab = "family",
 		hint = "Dyes of this color you could make right now: pigment in hand, plus what\nyour flowers would mill into. Ten of the SAME flower make one pigment." },
-	gShort    = { header = "Short",    groupSort = "short",    w = 48, tab = "family",
-		hint = "Dyes in this family still under their goal." },
+	-- Wide enough for a four-figure shortfall: a goal of 500 on a dye you own 10 of is
+	-- an ordinary thing to set, and 48px clipped it.
+	gShort    = { header = "Short",    groupSort = "short",    w = 60, tab = "family",
+		hint = "Dyes still needed in this family: each goal minus what you own, added up.\nCompare it with Makeable to see whether your stock can close the gap." },
 }
 local ORDER_BY_TAB = {
 	dye    = { "goal", "value", "flowers", "pigment", "owned" },
@@ -791,9 +793,12 @@ function ns.Refresh()
 				local gval = ns.GetGoal(dye.key)
 				row.goalBox:SetText(gval > 0 and gval or "")
 			end
-			-- Green check when the goal is covered by dyes + ready pigment on hand.
-			local covered = layout.goal and rc and rc.goal > 0
-				and (rc.owned + rc.ownedPigments) >= rc.goal
+			-- Goal met means you HOLD them. Pigment in hand deliberately does not count:
+			-- when it did, a dye could show a green tick here while the family row
+			-- counted it short and the crafting window flagged it to craft — three
+			-- answers for one dye. Whether pigment can close the gap is what the
+			-- Makeable column is for.
+			local covered = layout.goal and rc and rc.goal > 0 and rc.owned >= rc.goal
 			row.goalCheck:SetShown(covered and true or false)
 			if GameTooltip:IsOwned(row) then ShowRowTooltip(row) end
 			row:Show()
