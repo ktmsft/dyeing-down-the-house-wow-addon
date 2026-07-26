@@ -3,7 +3,7 @@
 ## Notes: An account-wide tally of every housing dye across your bags, bank and Warband bank — with goals, recipes and auction prices. Color your world.
 ## Author: KTM (abitofmoss)
 ## Version: 1.2.0
-## License: MIT
+## X-License: All Rights Reserved
 ## Category: Professions
 ## IconTexture: 7449428
 ## SavedVariables: DyeingDownTheHouseDB
