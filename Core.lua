@@ -1608,8 +1608,15 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 	if event == "ADDON_LOADED" then
 		if arg1 ~= ADDON then return end
 
+		-- Dev vs live saved variables. A DEV build carries "[DEV]" in its Title (the
+		-- gitignored dev loader) and declares its own DyeingDownTheHouseDevDB, so dev experiments never
+		-- touch a live profile and both copies can sit installed side by side.
+		local isDev = C_AddOns and C_AddOns.GetAddOnMetadata
+			and ((C_AddOns.GetAddOnMetadata(ADDON, "Title") or ""):find("%[DEV%]") ~= nil)
+		if isDev then DyeingDownTheHouseDB = DyeingDownTheHouseDevDB end
 		DyeingDownTheHouseDB = DyeingDownTheHouseDB or {}
 		ApplyDefaults(DyeingDownTheHouseDB, defaults)
+		if isDev then DyeingDownTheHouseDevDB = DyeingDownTheHouseDB end   -- persist to the dev saved variable
 
 		local name, realm = UnitFullName("player")
 		realm = realm or GetRealmName()

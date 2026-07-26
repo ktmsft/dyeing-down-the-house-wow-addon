@@ -1,0 +1,4 @@
+
+# Local-only DEV loader (regenerate with tools/make-dev-toc.ps1); ships as DyeingDownTheHouse.toc
+/DyeingDownTheHouseDev.toc
+/dist/
