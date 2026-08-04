@@ -61,7 +61,7 @@ local COLDEF = {
 	-- that's what the column shows. The key and sort mode keep their old names so
 	-- saved column and sort preferences carry over.
 	value   = { header = "Cost",    sort = "price",     w = 72, tab = "dye", optional = true,
-		hint = "What one of this dye costs to make: ten of the cheapest flower of its color.\nDyes are Warband-bound now, so they can't be bought or sold — there's no\nauction price for one, and this is the cost that replaced it." },
+		hint = "What one costs to make: ten of its color's cheapest flower.\nDyes are Warband-bound now — you can't buy one." },
 	goal    = { header = "Dye Needed", sort = "goal",   w = 68, tab = "dye", optional = true },
 
 	-- family tab. Fixed set: each one is the reason this view exists, so none of them
@@ -982,7 +982,7 @@ function ns.BuildUI()
 		-- the dye prices went. It belongs here: this is the button they press when
 		-- they notice, and the answer is why it now scans half of what it used to.
 		if ns.DYES_TRADEABLE == false then
-			GameTooltip:AddLine("Flowers only — dyes are Warband-bound now, so they can't be\nbought or sold and have no auction price. The Cost column is\nwhat a dye costs to make instead.", 0.95, 0.8, 0.4, true)
+			GameTooltip:AddLine("Flowers only — Warband-bound dyes have no auction price.", 0.95, 0.8, 0.4, true)
 		end
 		local age = ShortAge(DyeingDownTheHouseDB.lastScan)
 		if age then

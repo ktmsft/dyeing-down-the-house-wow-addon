@@ -248,7 +248,7 @@ local function BuildPanel()
 			warband:SetPoint("TOPLEFT", 16, y)
 			warband:SetWidth(540)
 			warband:SetJustifyH("LEFT")
-			warband:SetText("Flowers are all that any of them price. Dyes are Warband-bound, so they can't be bought or sold and have no auction price — the Cost column is what a dye costs to make instead.")
+			warband:SetText("Flowers only — Warband-bound dyes have no auction price.")
 			warband:SetTextColor(0.95, 0.8, 0.4)
 			y = y - 32
 		end

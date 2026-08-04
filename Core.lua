@@ -1652,8 +1652,8 @@ local function AnnounceWarbandDyes()
 	if not DyeingDownTheHouseDB.warbandNoticePending then return end
 	DyeingDownTheHouseDB.warbandNoticePending = false
 
-	Print("dyes are |cffffd100Warband-bound|r now — they can't be bought or sold, so there's no dye price left to show.")
-	Print("scans price |cff66dd66flowers|r only, and the |cffffd100Cost|r column is what a dye costs to make: ten of its cheapest flower.")
+	Print("dyes are |cffffd100Warband-bound|r now — no auction price, so scans cover flowers only.")
+	Print("the |cffffd100Cost|r column is what a dye costs to make: ten of its cheapest flower.")
 end
 
 local refreshPending = false
