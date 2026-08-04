@@ -152,4 +152,4 @@ Midnight (12.0.7+). No libraries, no required dependencies.
 
 ---
 
-KTM (abitofmoss) · MIT · bugs and suggestions welcome.
+KTM (abitofmoss) · All Rights Reserved · bugs and suggestions welcome.

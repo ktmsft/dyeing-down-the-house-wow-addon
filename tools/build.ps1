@@ -7,9 +7,8 @@
 
     Version comes from the .toc, so the zip name and the addon can never disagree.
 
-    Left out: the dev loader (DyeingDownTheHouseDev.toc), tools/, .git, dist/, the
-    README (that is the GitHub page), and LICENSE.txt, which is the superseded MIT
-    license from v1.0.0. LICENSE is the current one.
+    Left out: the dev loader (DyeingDownTheHouseDev.toc), tools/, .git, dist/, and
+    the README (that is the GitHub page).
 
     Usage:  pwsh tools/build.ps1
 #>
@@ -25,7 +24,7 @@ $version = ($toc | Select-String -Pattern '^##\s*Version:\s*(.+?)\s*$').Matches[
 if (-not $version) { throw "Could not read ## Version from $folder.toc" }
 
 $exclude = @('.git', '.gitignore', '.claude', 'dist', 'tools',
-             'README.md', 'LICENSE.txt', "${folder}Dev.toc")
+             'README.md', "${folder}Dev.toc")
 
 Write-Host "Building $folder $version ..."
 
