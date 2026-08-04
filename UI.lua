@@ -14,7 +14,7 @@ local ADDON, ns = ...
 --                     draws on the same pigment pile — so they're stated once here.
 --                     Opens onto that family's flowers.
 --
---   By Dye            Dye | Have | Pigment | Flowers | Value | Dye Needed
+--   By Dye            Dye | Have | Pigment | Flowers | Cost | Dye Needed
 --                     The flat per-dye list, for "how am I doing on THIS dye".
 --                     Its Pigment/Flowers columns necessarily repeat down every dye
 --                     of a family; the family tab exists so you don't have to read
@@ -56,7 +56,12 @@ local COLDEF = {
 		hint = "Pigments of this color you hold, and in ( ) how many of this dye they'd make.\nShared by every dye of the color — see the By Color Family tab." },
 	flowers = { header = "Flowers", sort = "craftherb", w = 66, tab = "dye", optional = true,
 		hint = "Flowers of this color you hold, and in ( ) how many of this dye they'd mill into.\nShared by every dye of the color — see the By Color Family tab." },
-	value   = { header = "Value",   sort = "price",     w = 72, tab = "dye", optional = true },
+	-- Was "Value" — a dye's auction price — until dyes went Warband-bound and stopped
+	-- having one. What's left that's still a number is what it costs to MAKE, so
+	-- that's what the column shows. The key and sort mode keep their old names so
+	-- saved column and sort preferences carry over.
+	value   = { header = "Cost",    sort = "price",     w = 72, tab = "dye", optional = true,
+		hint = "What one of this dye costs to make: ten of the cheapest flower of its color.\nDyes are Warband-bound now, so they can't be bought or sold — there's no\nauction price for one, and this is the cost that replaced it." },
 	goal    = { header = "Dye Needed", sort = "goal",   w = 68, tab = "dye", optional = true },
 
 	-- family tab. Fixed set: each one is the reason this view exists, so none of them
@@ -599,11 +604,12 @@ local function CellValue(key, dye, rc)
 	elseif key == "flowers" then
 		return HeldCell(rc and rc.ownedHerbs or 0, rc and rc.craftableFromHerbs or 0)
 	elseif key == "value" then
-		-- Unit sale price (per dye) — matches the Value sort and is what you compare
-		-- across dyes for "most profitable". Holdings value is in the tooltip.
-		local p = ns.GetPrice(dye.key)
-		local text = p and ("~%s/ea"):format(FormatMoney(p)) or "—"
-		return text, p and 1 or 0.4, p and 0.9 or 0.4, p and 0.4 or 0.4
+		-- What one costs to make — ten of the cheapest flower of its color. There's no
+		-- sale price to show any more (Warband-bound), and this is the number you
+		-- actually compare across dyes now: which of these is cheap to make today.
+		local c = ns.GetCraftCost(dye.key)
+		local text = c and ("~%s/ea"):format(FormatMoney(c)) or "—"
+		return text, c and 1 or 0.4, c and 0.9 or 0.4, c and 0.4 or 0.4
 	end
 end
 
@@ -685,9 +691,9 @@ function ns.Refresh()
 	local function AddFlowers(breakdown, color)
 		local from = #entries + 1
 		for _, fl in ipairs(breakdown and breakdown.flowers or {}) do
-			-- Optionally hide flowers that cost more to mill than the dye costs to buy.
-			-- (cheaperToCraft == false means dearer; nil means unknown — keep those.)
-			if not (hideCostly and fl.cheaperToCraft == false) then
+			-- Optionally hide flowers that aren't the cheapest way into this color.
+			-- (isCheapest == false means dearer; nil means unpriced — keep those.)
+			if not (hideCostly and fl.isCheapest == false) then
 				entries[#entries + 1] = { kind = "flower", flower = fl, color = color }
 			end
 		end
@@ -816,11 +822,11 @@ function ns.Refresh()
 			local parts = { ("%d held"):format(fl.have),
 				("makes %d %s"):format(fl.dyesEach, fl.dyesEach == 1 and "dye" or "dyes") }
 			if fl.craftCost then
-				-- Color the craft cost itself: green if cheaper to craft than buy,
-				-- red if dearer, default when there's no dye price to compare.
+				-- Color the craft cost itself: green on the cheapest way into this color,
+				-- red on a dearer one, default when nothing here is priced yet to compare.
 				local craft = FormatMoney(fl.craftCost) .. " to craft"
-				if fl.cheaperToCraft == true then craft = "|cff66dd66" .. craft .. "|r"
-				elseif fl.cheaperToCraft == false then craft = "|cffdd6666" .. craft .. "|r" end
+				if fl.isCheapest == true then craft = "|cff66dd66" .. craft .. "|r"
+				elseif fl.isCheapest == false then craft = "|cffdd6666" .. craft .. "|r" end
 				parts[#parts + 1] = craft
 			end
 			row.fDetail:SetText(table.concat(parts, "   ·   "))
@@ -964,13 +970,19 @@ function ns.BuildUI()
 		local source = ActivePriceSource()
 		if source and source.instant then
 			GameTooltip:AddLine("Update prices")
-			GameTooltip:AddLine(("Reads every shown dye and flower straight from %s.\nNo auction house visit needed."):format(source.name),
+			GameTooltip:AddLine(("Reads every shown flower straight from %s.\nNo auction house visit needed."):format(source.name),
 				0.8, 0.8, 0.8, true)
 		else
 			GameTooltip:AddLine("Scan AH prices")
-			GameTooltip:AddLine("Open the Auction House, then Scan to price every shown dye and\nflower (lowest buyout with real market depth behind it).",
+			GameTooltip:AddLine("Open the Auction House, then Scan to price every shown flower\n(lowest buyout with real market depth behind it).",
 				0.8, 0.8, 0.8, true)
 			GameTooltip:AddLine("Run TSM or Auctionator? /dye source lets you read their prices\ninstead, instantly and anywhere.", 0.6, 0.6, 0.7, true)
+		end
+		-- The note for anyone who didn't read the patch notes and is wondering where
+		-- the dye prices went. It belongs here: this is the button they press when
+		-- they notice, and the answer is why it now scans half of what it used to.
+		if ns.DYES_TRADEABLE == false then
+			GameTooltip:AddLine("Flowers only — dyes are Warband-bound now, so they can't be\nbought or sold and have no auction price. The Cost column is\nwhat a dye costs to make instead.", 0.95, 0.8, 0.4, true)
 		end
 		local age = ShortAge(DyeingDownTheHouseDB.lastScan)
 		if age then

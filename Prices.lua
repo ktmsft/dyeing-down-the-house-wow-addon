@@ -11,9 +11,12 @@ local ADDON, ns = ...
 --   blizzard     our own auction-house scan (Core.lua) — always available
 --
 -- The first two read a database another addon already maintains, so they price
--- every dye and flower instantly, anywhere in the world, with no queries at all.
--- The AH scan has to ask Blizzard one throttled question per item and only works
--- standing at an auction house — so it's the fallback, not the default.
+-- every flower instantly, anywhere in the world, with no queries at all. The AH
+-- scan has to ask Blizzard one throttled question per item and only works standing
+-- at an auction house — so it's the fallback, not the default.
+--
+-- Only flowers, from any of the three: dyes are Warband-bound and can't be listed,
+-- so there is no dye price for any source to know (see ns.DYES_TRADEABLE).
 --
 -- That ordering is also the fix for a real bug: Blizzard's auction API silently
 -- drops queries once you exceed its rate limit, which used to strand a scan partway
@@ -159,10 +162,13 @@ end
 --------------------------------------------------------------------------------
 
 -- Which items a price update covers. Same rules as the AH scan queue in Core:
--- pigments are an intermediate nobody buys or sells to make a decision, and hidden
--- dyes and flowers aren't on screen so aren't worth a lookup.
+-- flowers only. Warband-bound dyes have no market to have a price in, so TSM and
+-- Auctionator have nothing to say about them either — asking would just spend the
+-- pass filing `nil` against every dye. Pigments are an intermediate nobody trades
+-- to make a decision, and hidden flowers aren't on screen so aren't worth a lookup.
 function ns.ShouldPriceEntry(entry)
 	if not entry.id or entry.kind == "pigment" then return false end
+	if not ns.IsTradeable(entry) then return false end
 	if entry.kind == "dye" and ns.IsDyeHidden(entry.key) then return false end
 	if entry.kind == "herb" and ns.IsHerbHidden(entry.name) then return false end
 	return true
@@ -219,14 +225,14 @@ function ns.StartScan(items)
 	local priced, missing = ns.ImportPrices(source)
 
 	if priced == 0 then
-		return false, ("%s has no prices for these items yet. Visit the auction house with it once, or run /dye source blizzard to scan directly.")
+		return false, ("%s has no flower prices yet. Visit the auction house with it once, or run /dye source blizzard to scan directly.")
 			:format(source.name)
 	end
 
 	if missing > 0 then
-		Print(("priced %d from %s (%d not in its database yet)."):format(priced, source.name, missing))
+		Print(("priced %d flowers from %s (%d not in its database yet)."):format(priced, source.name, missing))
 	else
-		Print(("priced %d items from %s."):format(priced, source.name))
+		Print(("priced %d flowers from %s."):format(priced, source.name))
 	end
 
 	ns.Refresh()

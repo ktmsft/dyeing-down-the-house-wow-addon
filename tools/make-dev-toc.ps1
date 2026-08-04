@@ -11,9 +11,14 @@ $ErrorActionPreference = 'Stop'
 $repo     = Split-Path -Parent $PSScriptRoot
 $codename = Split-Path -Leaf $repo
 $shipToc  = ($codename -replace 'Dev$','') + '.toc'
-$out = Get-Content (Join-Path $repo $shipToc) | ForEach-Object {
+# Encoding is explicit on both ends. Windows PowerShell reads as ANSI and writes a
+# BOM by default, which mangles the em dash in the Notes line and hands WoW a .toc
+# that doesn't match the shipped one byte for byte. pwsh defaults are already right;
+# being explicit makes the script produce the same file under either.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$out = Get-Content (Join-Path $repo $shipToc) -Encoding UTF8 | ForEach-Object {
     $_ -replace '^(## Title: .+?)\s*$', '${1} [DEV]' `
        -replace '^(## SavedVariables(?:PerCharacter)?: )(\w+?)DB\s*$', '${1}${2}DevDB'
 }
-Set-Content -Path (Join-Path $repo ($codename + '.toc')) -Value $out -Encoding utf8
+[System.IO.File]::WriteAllLines((Join-Path $repo ($codename + '.toc')), $out, $utf8NoBom)
 Write-Host ("Wrote " + $codename + ".toc  (dev loader: [DEV] title + Dev saved variables)")

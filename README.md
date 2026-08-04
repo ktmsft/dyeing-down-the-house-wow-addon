@@ -7,12 +7,12 @@ you're out.
 
 So off you go to fix that. And somewhere between the Dye Station, the auction house
 and the bank alt, it's gone: *which* green was it? How many did you need? Two? Six?
-And was it cheaper to mill it yourself or just buy the thing outright?
+And which of the fifteen flowers that mill into green is the cheap one this week?
 
 Back to the house to check. Again.
 
 Dyeing Down The House lets you write it down the second you notice — then remembers
-it for you, prices it, and tells you the cheapest way to get it.
+it for you, prices it, and tells you the cheapest way to make it.
 
 ## 🏠 Note it down while you're standing right there
 
@@ -41,7 +41,7 @@ that tells you what you can actually make. Open a color to see the flowers it mi
 from — once, not repeated under every dye.
 
 **By Dye** — the flat list, one row per dye, for when you care about a specific
-one: what you have, what it's worth, how many you still need.
+one: what you have, what it costs to make, how many you still need.
 
 "Own" means **everything** — every character's bags, every character's bank, and the
 Warband bank, all totalled. That green you were sure you were out of might be sitting
@@ -50,15 +50,17 @@ on the alt you never play.
 A green check appears next to a goal once you're covered, counting dyes you hold
 *plus* pigment already sitting there ready to become more. No check, no worry.
 
-## 💰 Then it tells you the cheapest way to get it
+## 💰 Then it tells you the cheapest way to make it
 
-Craft it, or just buy it? That depends on today's prices, and the answer changes
-week to week.
+Dyes are Warband-bound — you can't buy one, so making it is the only route. But
+there are fifteen flowers that mill into black, they're all still on the auction
+house, and which one is cheapest changes week to week.
 
-Hit **Scan** and every dye and flower gets priced. Open a color and you get every
-flower that mills into that family — how many you hold, how many dyes that alone
-would make, and what going that route would cost. **Green if crafting beats buying,
-red if it doesn't.** Cheapest first.
+Hit **Scan** and every flower gets priced. The **Cost** column then shows what one
+of each dye costs to make: ten of the cheapest flower of its color. Open a color and
+you get every flower that mills into that family — how many you hold, how many dyes
+that alone would make, and what going that route would cost. **Green on the cheapest
+way in, red on a dearer one.** Cheapest first.
 
 Hovering a color also tells you which of its flowers another family wants. Spending
 them here is spending them there.
@@ -81,9 +83,9 @@ trying to remember which one it was.
 
 📋 A **"You have 6 / need 10"** line under the recipe title, green once you get there.
 
-✅ A green check or red X on every herb in the reagent picker: is milling *this* one
-worth it for *this* color, at today's prices? No more guessing which of fifteen herbs
-is the cheap one.
+✅ A green check or red X on every herb in the reagent picker: is *this* the cheapest
+one to mill for *this* color, at today's prices? No more guessing which of fifteen
+herbs is the cheap one.
 
 All of it can be switched off if you'd rather it stayed out of the way.
 
@@ -102,12 +104,12 @@ Can't remember what the green was called? Type `green` — you get the dyes lite
 named "…Green…" **and** every dye in the green family, whatever it happens to be
 called.
 
-Sort by name, amount owned, goal, value, or by how much of it you could make right
-now.
+Sort by name, amount owned, goal, cost to make, or by how much of it you could make
+right now.
 
 ## ⚙️ Configurable
 
-Everything lives in one options panel. Pick your columns, hide cost-prohibitive
+Everything lives in one options panel. Pick your columns, show only the cheapest
 flowers, lock the window, toggle the rainbow title.
 
 Two collapsible checklists trim the list to what you care about: all 62 dyes grouped
@@ -120,10 +122,10 @@ and collapses to a slim title bar if you'd rather tuck it away than close it.
 ## ⌨️ Commands
 
 - `/dye` — toggle the window
-- `/dye scan` — price everything
+- `/dye scan` — price the flowers
 - `/dye source <auto|tsm|auctionator|blizzard>` — where prices come from
 - `/dye search <text>` — filter by dye name or color family
-- `/dye sort <alpha | price | owned>` — change the order
+- `/dye sort <alpha | price | owned>` — change the order (price = cost to craft)
 - `/dye expand` · `/dye collapse` — open or close every color group
 - `/dye hidezero` — hide dyes you have none of
 - `/dye lock` · `/dye unlock` — freeze or free the window

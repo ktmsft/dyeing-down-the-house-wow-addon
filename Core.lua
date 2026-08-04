@@ -19,6 +19,24 @@ local ADDON, ns = ...
 ns.HERBS_PER_PIGMENT = ns.HERBS_PER_PIGMENT or 10
 ns.PIGMENTS_PER_DYE  = ns.PIGMENTS_PER_DYE  or 1
 
+-- Dyes became Warband-bound in the 4 Aug 2026 patch: they can no longer be traded
+-- or listed, so a dye has no buy price at all any more. Flowers and pigments are
+-- unchanged and still sell normally.
+--
+-- One flag rather than a dozen scattered `kind == "dye"` checks, because everything
+-- downstream has to agree with it: the scan queue, the price import, the Cost
+-- column, and the reagent-picker marks. If Blizzard ever reverses this, flipping it
+-- back to true restores the old craft-vs-buy behaviour everywhere at once.
+ns.DYES_TRADEABLE = false
+
+-- Can this item be bought or sold at all? Takes an entry or an item key.
+function ns.IsTradeable(entry)
+	if type(entry) == "string" then entry = ns.byKey[entry] end
+	if not entry then return false end
+	if entry.kind == "dye" then return ns.DYES_TRADEABLE end
+	return true
+end
+
 ns.byID = {}
 ns.byName = {}
 ns.byKey = {}
@@ -86,7 +104,8 @@ ns.OpenOptions     = ns.OpenOptions     or function() end
 -- Saved variables
 --------------------------------------------------------------------------------
 
-local DB_VERSION = 1
+-- 2: dyes went Warband-bound, so every stored dye price is now junk (see Migrate).
+local DB_VERSION = 2
 
 local defaults = {
 	version = DB_VERSION,
@@ -105,6 +124,10 @@ local defaults = {
 	-- pins it. See Prices.lua.
 	priceSource = "auto",     -- "auto" | "blizzard" | "auctionator" | "tsm"
 	tsmPriceKey = "DBMarket", -- TSM custom price string, when TSM is the source
+	-- Set by the v2 migration on a profile that predates dyes going Warband-bound;
+	-- the next login says so once and clears it. Default false, so a profile created
+	-- after the patch never announces a change it never lived through.
+	warbandNoticePending = false,
 	ui = {
 		point = "CENTER",
 		relPoint = "CENTER",
@@ -130,12 +153,13 @@ local defaults = {
 		cols = { pigment = true, flowers = true, value = true, goal = true },
 		expanded = {},       -- [dyeKey] = true, dye rows opened to show their flowers
 		expandedColors = {}, -- [color] = true, color groups opened on the family tab
-		hideCostlyFlowers = false, -- in the expand view, hide flowers dearer to craft than to buy
+		hideCostlyFlowers = false, -- in the expand view, show only the cheapest flower(s) of a color
 		hiddenDyes = {}, -- [dyeKey] = true, dyes the player unchecked (hidden from the list)
 		hiddenHerbs = {}, -- [herbNameLower] = true, flowers hidden from the expand view
 		rainbowTitle = true, -- flashy rainbow name (off = plain)
 		housingGoalInput = true, -- show the "Dye Needed" box in the house dye panel
 		markHerbs = true, -- green check / red X on herbs in the pigment reagent picker
+		                  -- (check = cheapest flower for that color, see GetHerbCraftVerdict)
 	},
 }
 
@@ -148,6 +172,28 @@ local function ApplyDefaults(target, source)
 			target[k] = v
 		end
 	end
+end
+
+-- Bring an older saved profile up to date. Runs after ApplyDefaults, so anything
+-- new already exists; this is only for values that are now WRONG rather than
+-- missing. Each step is guarded by the version it upgrades from, so it runs once.
+local function Migrate(db)
+	local from = tonumber(db.version) or 1
+
+	-- v1 -> v2: dyes are Warband-bound and can't be listed, so every dye price on
+	-- file is a pre-patch relic. Left alone they'd quietly outlive the market that
+	-- made them and keep answering "what's it worth" with a number that no longer
+	-- exists. Flower prices are untouched — flowers still trade.
+	if from < 2 then
+		for key in pairs(db.prices or {}) do
+			local entry = ns.byKey[key]
+			if entry and entry.kind == "dye" then db.prices[key] = nil end
+		end
+		-- This profile watched its dye prices vanish, so it gets told why.
+		db.warbandNoticePending = true
+	end
+
+	db.version = DB_VERSION
 end
 
 local charKey
@@ -584,7 +630,14 @@ end
 --
 -- Stored per item key in copper, with the timestamp of the scan and its source.
 -- The AH scan that fills this in is a separate step; these are the pure readers
--- and writers the value display and the price sort are built on.
+-- and writers the cost display and the sort are built on.
+--
+-- In practice this now only ever holds FLOWER prices: Warband-bound dyes aren't
+-- traded, so nothing writes one and Migrate() cleared the pre-patch leftovers. The
+-- store stays kind-agnostic rather than rejecting dyes outright — it's a dumb
+-- key/value cache, and the rule about what's worth pricing belongs with the
+-- scanner (BuildScanQueue) and the importer (ShouldPriceEntry), which is where a
+-- reader can find it stated once.
 --------------------------------------------------------------------------------
 
 function ns.SetPrice(key, copper, source)
@@ -629,12 +682,15 @@ ns.Print = Print -- Prices.lua reports through the same prefix
 --------------------------------------------------------------------------------
 -- Auction House scanning
 --
+-- Since dyes went Warband-bound, a scan prices FLOWERS and nothing else — they're
+-- the only half of the recipe still on the auction house. See BuildScanQueue.
+--
 -- Value is the volume-weighted average unit price of the cheapest ~N units on the
 -- AH — what you'd realistically pay/get, not the single lowest listing (which can
--- be a tiny spiteful stack). Verified against C_AuctionHouse: dyes, pigments and
--- herbs are all commodities, a commodity search returns its whole listing set in
--- one COMMODITY_SEARCH_RESULTS_UPDATED, each listing carrying unitPrice (copper)
--- and quantity.
+-- be a tiny spiteful stack). Verified against C_AuctionHouse: flowers are
+-- commodities, a commodity search returns its whole listing set in one
+-- COMMODITY_SEARCH_RESULTS_UPDATED, each listing carrying unitPrice (copper) and
+-- quantity.
 --
 -- ComputeMarketPrice is pure and unit-tested; the scan orchestration below drives
 -- one throttled query per item while the player is at the AH.
@@ -758,7 +814,7 @@ local function FinishScan()
 	scan.awaitingNext = false
 	DyeingDownTheHouseDB.lastScan = time() -- for the "scanned Xm ago" stamp
 	-- Progress rode the floating overlay, so success stays silent. A partial scan
-	-- does NOT: quietly pricing 40 of 60 items would leave craft-vs-buy verdicts
+	-- does NOT: quietly pricing 40 of 60 flowers would leave cheapest-flower verdicts
 	-- confidently wrong with nothing on screen to say so.
 	if scan.failed > 0 then
 		Print(("scan finished, but %d item%s never answered and %s skipped. Run it again to fill the gaps.")
@@ -857,17 +913,21 @@ function AdvanceScan()
 end
 
 -- The list of item IDs a scan will price, in order. Pure, so it's testable.
---   * dyes (the end product's price) and herbs (the ingredient cost) — pigments
---     are an intermediate we never buy/sell to decide, so they're skipped;
---   * dyes and flowers the player has unchecked in the config are skipped too —
---     if they aren't shown, there's no reason to spend a query pricing them;
+--   * FLOWERS only. Dyes are Warband-bound and can't be listed (ns.DYES_TRADEABLE),
+--     so querying one is a guaranteed empty result — and on a rate-limited API,
+--     spending half the run's queries on items that cannot have a price is worse
+--     than useless: it's what pushes the flowers we DO need past the limiter.
+--     Pigments were already skipped as an intermediate nobody trades to decide.
+--   * flowers the player has unchecked in the config are skipped too — if they
+--     aren't shown, there's no reason to spend a query pricing them;
 --   * each id appears at most once.
 function ns.BuildScanQueue(items)
 	local queue, seen = {}, {}
 	for _, entry in ipairs(items or ns.ITEMS) do
 		local hidden = (entry.kind == "dye" and ns.IsDyeHidden(entry.key))
 			or (entry.kind == "herb" and ns.IsHerbHidden(entry.name))
-		if entry.id and entry.kind ~= "pigment" and not hidden and not seen[entry.id] then
+		if entry.id and entry.kind ~= "pigment" and ns.IsTradeable(entry)
+			and not hidden and not seen[entry.id] then
 			seen[entry.id] = true
 			queue[#queue + 1] = entry.id
 		end
@@ -887,7 +947,7 @@ function ns.StartAHScan(items)
 
 	scan.queue = ns.BuildScanQueue(items)
 	if #scan.queue == 0 then
-		return false, "nothing to price — every dye and flower is hidden"
+		return false, "nothing to price — every flower is hidden"
 	end
 
 	scan.active = true
@@ -1055,17 +1115,21 @@ function ns.GetRecipeStatus(dyeKey)
 	}
 end
 
--- Craft-vs-buy breakdown for a dye's expand view. One dye costs 10 of a SINGLE
--- flower to mill, so crafting via a flower costs 10 × that flower's unit price;
--- compared to the dye's own price, that says whether it's cheaper to craft or buy.
--- Per flower: how many you hold, how many dyes that makes, its craft cost, and the
--- craft-vs-buy verdict. Flowers are ordered cheapest-to-craft first.
+-- Craft breakdown for a dye's expand view. One dye costs 10 of a SINGLE flower to
+-- mill, so crafting via a flower costs 10 × that flower's unit price. Per flower:
+-- how many you hold, how many dyes that makes, its craft cost, and whether it's the
+-- cheapest route into this color. Flowers are ordered cheapest-to-craft first.
+--
+-- This used to be a craft-VS-BUY comparison. Warband-bound dyes killed the "buy"
+-- half of it — there's no price to weigh crafting against, because crafting is the
+-- only way to get one now. So the question the expand view answers changed from
+-- "should I make this or buy it?" to "which flower should I make it out of?", which
+-- is the one still worth asking. The comparison is now flower against flower.
 function ns.GetCraftBreakdown(dyeKey)
 	local dye = ns.byKey[dyeKey]
 	if not dye or dye.kind ~= "dye" then return nil end
 
 	local perDye = ns.HERBS_PER_PIGMENT * ns.PIGMENTS_PER_DYE -- flowers per dye (10)
-	local dyePrice = ns.GetPrice(dyeKey)                       -- buy-outright cost, may be nil
 
 	local hiddenHerbs = DyeingDownTheHouseDB.ui.hiddenHerbs or {}
 	local flowers, cheapestCraft = {}, nil
@@ -1079,9 +1143,6 @@ function ns.GetCraftBreakdown(dyeKey)
 			if craftCost and (not cheapestCraft or craftCost < cheapestCraft) then
 				cheapestCraft = craftCost
 			end
-			-- true/false = cheaper to craft than buy / not; nil when a price is missing.
-			local cheaper = nil
-			if craftCost and dyePrice then cheaper = (craftCost < dyePrice) end
 			flowers[#flowers + 1] = {
 				key = herb.key,
 				name = herb.name or ("Item " .. tostring(herb.id)),
@@ -1090,7 +1151,7 @@ function ns.GetCraftBreakdown(dyeKey)
 				dyesEach = math.floor(have / perDye),      -- dyes this flower alone can make
 				price = price,                              -- flower unit price (nil if unscanned)
 				craftCost = craftCost,                      -- 10 × price
-				cheaperToCraft = cheaper,
+				isCheapest = nil,                           -- filled in below
 			}
 		end
 	end
@@ -1102,36 +1163,63 @@ function ns.GetCraftBreakdown(dyeKey)
 		return a.name < b.name
 	end)
 
+	-- true = the cheapest way into this color, false = a dearer one, nil = unpriced.
+	-- Ties all count as cheapest: two flowers at the same cost are equally right, and
+	-- marking one of them the loser on sort order alone would be a lie.
+	for _, fl in ipairs(flowers) do
+		if fl.craftCost then fl.isCheapest = (fl.craftCost == cheapestCraft) end
+	end
+
 	return {
 		key = dyeKey,
 		color = dye.color,
-		dyePrice = dyePrice,
 		flowersPerDye = perDye,
-		cheapestCraft = cheapestCraft,
-		-- Overall verdict: is the cheapest craft path cheaper than buying?
-		cheaperToCraft = (cheapestCraft and dyePrice) and (cheapestCraft < dyePrice) or nil,
+		cheapestCraft = cheapestCraft, -- what this dye costs to make, via its best flower
 		flowers = flowers,
 	}
 end
 
--- For the pigment reagent picker: is milling THIS flower worth it for `color`?
--- 10 flowers make one dye's worth of pigment, so compares 10 × flower price to the
--- best-priced dye of that color (the most you could get out of the pigment).
--- Returns true (worth crafting), false (cost-prohibitive), or nil (price unknown).
+-- What one of this dye costs to make, in copper: 10 × the cheapest flower of its
+-- color. nil when none of that color's flowers has been priced yet. This is what
+-- the Cost column and the price sort read, and it's the closest thing a dye still
+-- has to a number now that it can't be bought.
+function ns.GetCraftCost(dyeKey)
+	local dye = ns.byKey[dyeKey]
+	if not dye or dye.kind ~= "dye" then return nil end
+
+	local perDye = ns.HERBS_PER_PIGMENT * ns.PIGMENTS_PER_DYE
+	local hiddenHerbs = DyeingDownTheHouseDB.ui.hiddenHerbs or {}
+	local cheapest
+	for _, herb in ipairs(ns.herbsByColor[dye.color] or {}) do
+		if not (herb.name and hiddenHerbs[herb.name:lower()]) then
+			local price = ns.GetPrice(herb.key)
+			if price and (not cheapest or price < cheapest) then cheapest = price end
+		end
+	end
+	return cheapest and cheapest * perDye or nil
+end
+
+-- For the pigment reagent picker: is THIS flower the one to mill for `color`?
+-- Returns true (cheapest route into the color — mill this), false (a dearer flower
+-- would do the same job for less), or nil (nothing of this color is priced yet, so
+-- there's no honest answer and the picker shows no mark at all).
+--
+-- The comparison used to be against the dearest dye of the color — the most the
+-- pigment could become. Warband-bound dyes have no price to be dearest, so the
+-- check is now flower against flower: of everything that mills into this color,
+-- which costs least? A red X no longer means "don't bother", it means "there's a
+-- cheaper flower in this list".
 function ns.GetHerbCraftVerdict(herbKey, color)
 	local herbPrice = ns.GetPrice(herbKey)
 	if not herbPrice then return nil end
-	local craftCost = herbPrice * (ns.HERBS_PER_PIGMENT * ns.PIGMENTS_PER_DYE)
 
-	local best
-	for _, dye in ipairs(ns.DYES) do
-		if dye.color == color then
-			local p = ns.GetPrice(dye.key)
-			if p and (not best or p > best) then best = p end
-		end
+	local cheapest
+	for _, herb in ipairs(ns.herbsByColor[color] or {}) do
+		local p = ns.GetPrice(herb.key)
+		if p and (not cheapest or p < cheapest) then cheapest = p end
 	end
-	if not best then return nil end
-	return craftCost < best
+	if not cheapest then return nil end
+	return herbPrice <= cheapest
 end
 
 -- Same, keyed by the herb's item ID (what the reagent picker hands us).
@@ -1167,7 +1255,9 @@ end
 -- caller's list is untouched. Name is always the tiebreaker, ascending.
 --   "alpha" — by name
 --   "owned" — by account-wide count
---   "price" — by unit price; UNPRICED dyes always sort last, either direction
+--   "price" — by what the dye costs to CRAFT (its cheapest flower × 10); dyes with
+--             no priced flower always sort last, either direction. The mode keeps
+--             its old name so saved sort preferences survive the change of meaning.
 -- When `dir` is omitted, each mode's natural default is used (A–Z, most-owned,
 -- highest-price), which is what keeps two-argument callers working.
 -- Sortable columns and each one's natural default direction.
@@ -1179,7 +1269,7 @@ local DEFAULT_DIR = {
 	alpha    = "asc",   -- A–Z
 	owned    = "desc",  -- most owned first
 	goal     = "desc",  -- biggest goals first
-	price    = "desc",  -- most valuable first
+	price    = "asc",   -- cheapest to craft first (it's a cost now, not a value)
 	craft    = "desc",  -- most craftable first
 	craftpig = "desc",  -- most craftable from pigments first
 	craftherb = "desc", -- most craftable from flowers first
@@ -1192,7 +1282,7 @@ local DEFAULT_DIR = {
 local function MetricPair(mode, key)
 	if mode == "owned" then return ns.GetTotal(key) end
 	if mode == "goal"  then return ns.GetGoal(key) end
-	if mode == "price" then return ns.GetPrice(key) end          -- may be nil
+	if mode == "price" then return ns.GetCraftCost(key) end      -- may be nil
 	if mode == "craft" or mode == "craftpig" or mode == "craftherb" then
 		local rc = ns.GetRecipeStatus(key)
 		if not rc then return 0, 0 end
@@ -1406,19 +1496,16 @@ function ns.SetAllColorsExpanded(open)
 	ns.Refresh()
 end
 
--- Craft-vs-buy for a whole color. The per-flower figures are the same ones
--- GetCraftBreakdown produces, but the "worth crafting?" comparison is made against
--- the DEAREST dye of the color — the most that pigment could become — because a
--- color's flowers aren't tied to any single dye. Matches GetHerbCraftVerdict, which
--- the reagent-picker markers already use.
+-- The craft breakdown for a whole color. The per-flower figures are the same ones
+-- GetCraftBreakdown produces and are identical for every dye of a color — flowers
+-- and pigment belong to the family, not to one dye — so any dye of the color gives
+-- the same answer and the first one will do. (It used to have to pick the
+-- dearest-priced dye, because the verdict was measured against that price; with no
+-- dye prices left there's nothing to choose between them.)
 function ns.GetColorCraftBreakdown(color)
-	local pick, best
+	local pick
 	for _, dye in ipairs(ns.DYES) do
-		if dye.color == color then
-			pick = pick or dye.key
-			local price = ns.GetPrice(dye.key)
-			if price and (not best or price > best) then best, pick = price, dye.key end
-		end
+		if dye.color == color then pick = dye.key; break end
 	end
 	if not pick then return nil end
 	return ns.GetCraftBreakdown(pick)
@@ -1552,6 +1639,23 @@ end
 -- Events
 --------------------------------------------------------------------------------
 
+-- Said once, ever, on the first login after dyes went Warband-bound.
+--
+-- Prices for half the addon's items disappearing is exactly the kind of change that
+-- reads as the addon having broken, and plenty of people don't read patch notes. So
+-- it says what happened and what the numbers mean now — once, and then never again,
+-- because the second telling is nagging. Only a profile that predates the patch has
+-- the flag set (see Migrate): there's nothing to explain to someone who never saw a
+-- dye price in the first place.
+local function AnnounceWarbandDyes()
+	if ns.DYES_TRADEABLE then return end
+	if not DyeingDownTheHouseDB.warbandNoticePending then return end
+	DyeingDownTheHouseDB.warbandNoticePending = false
+
+	Print("dyes are |cffffd100Warband-bound|r now — they can't be bought or sold, so there's no dye price left to show.")
+	Print("scans price |cff66dd66flowers|r only, and the |cffffd100Cost|r column is what a dye costs to make: ten of its cheapest flower.")
+end
+
 local refreshPending = false
 
 local function QueueRefresh()
@@ -1618,6 +1722,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		if isDev then DyeingDownTheHouseDB = DyeingDownTheHouseDevDB end
 		DyeingDownTheHouseDB = DyeingDownTheHouseDB or {}
 		ApplyDefaults(DyeingDownTheHouseDB, defaults)
+		Migrate(DyeingDownTheHouseDB)
 		if isDev then DyeingDownTheHouseDevDB = DyeingDownTheHouseDB end   -- persist to the dev saved variable
 
 		local name, realm = UnitFullName("player")
@@ -1650,6 +1755,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		RefreshBorrowed()
 		ns.Refresh()
 		if DyeingDownTheHouseDB.ui.shown then ns.Show() end
+		AnnounceWarbandDyes()
 
 	elseif event == "BANKFRAME_OPENED" then
 		bankOpen = true
@@ -1760,8 +1866,8 @@ SlashCmdList.DYEINGDOWNTHEHOUSE = function(msg)
 		Print("commands:")
 		print("  /dye — toggle the window")
 		print("  /dye search <text> — filter by dye name or color family (blank clears)")
-		print("  /dye sort <alpha | price | owned> — change the order")
-		print("  /dye scan — price the dyes from your chosen price source")
+		print("  /dye sort <alpha | price | owned> — change the order (price = cost to craft)")
+		print("  /dye scan — price the flowers from your chosen price source")
 		print("  /dye source [auto|tsm|auctionator|blizzard] — where prices come from")
 		print("  /dye expand | collapse — open or close every color group")
 		print("  /dye hidezero — toggle hiding dyes you have none of")

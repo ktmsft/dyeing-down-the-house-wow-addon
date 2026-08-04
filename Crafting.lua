@@ -105,8 +105,10 @@ end
 --
 -- The picker is an anonymous ScrollBox flyout (verified: buttons expose
 -- :GetItemID() and elementData.reagent.itemID). Its recipe is a pigment, whose
--- color decides the verdict — is milling this herb worth it for that color
--- (10 × herb price vs the best dye of the color)?
+-- color decides the verdict — of every flower that mills into that color, is this
+-- the cheapest one? (It used to be "is milling this worth it against the price of
+-- the dye", but Warband-bound dyes have no price to weigh it against; see
+-- ns.GetHerbCraftVerdict.)
 --------------------------------------------------------------------------------
 
 local CHECK_READY   = "Interface\\RaidFrame\\ReadyCheck-Ready"    -- green check
@@ -136,8 +138,8 @@ local function DecorateFlyoutButton(btn, color)
 	end
 	local ok, itemID = pcall(btn.GetItemID, btn)
 	itemID = ok and itemID or nil
-	-- NB: keep false (prohibitive) distinct from nil (unknown) — an `and/or` here
-	-- would collapse false to nil and the red X would never show.
+	-- NB: keep false (a dearer flower) distinct from nil (nothing priced) — an
+	-- `and/or` here would collapse false to nil and the red X would never show.
 	local verdict = nil
 	if color and itemID then verdict = ns.GetHerbCraftVerdictByID(itemID, color) end
 

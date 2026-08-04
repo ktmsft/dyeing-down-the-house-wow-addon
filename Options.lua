@@ -176,7 +176,7 @@ local function BuildPanel()
 	local colDefs = {
 		{ "pigment", "Pigments — owned & craftable" },
 		{ "flowers", "Flowers — owned & craftable" },
-		{ "value",   "Dye value (AH price)" },
+		{ "value",   "Dye cost (to craft)" },
 		{ "goal",    "Dye needed (goal)" },
 	}
 	for i, cd in ipairs(colDefs) do
@@ -195,7 +195,7 @@ local function BuildPanel()
 	-- Display ---------------------------------------------------------------
 	SectionHeader(content, "Display"):SetPoint("TOPLEFT", 8, y)
 	y = y - 24
-	MakeCheck(content, "Hide cost-prohibitive flowers",
+	MakeCheck(content, "Show only the cheapest flowers",
 		function() return DyeingDownTheHouseDB.ui.hideCostlyFlowers end,
 		function(v) DyeingDownTheHouseDB.ui.hideCostlyFlowers = v; ns.Refresh() end)
 		:SetPoint("TOPLEFT", 16, y)
@@ -208,7 +208,7 @@ local function BuildPanel()
 		function() return DyeingDownTheHouseDB.ui.housingGoalInput end,
 		function(v) DyeingDownTheHouseDB.ui.housingGoalInput = v end)
 		:SetPoint("TOPLEFT", 16, y)
-	MakeCheck(content, "Mark cost-worthy herbs when crafting",
+	MakeCheck(content, "Mark the cheapest herbs when crafting",
 		function() return DyeingDownTheHouseDB.ui.markHerbs end,
 		function(v) DyeingDownTheHouseDB.ui.markHerbs = v; if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end end)
 		:SetPoint("TOPLEFT", 16 + COL2, y)
@@ -235,10 +235,23 @@ local function BuildPanel()
 		note:SetPoint("TOPLEFT", 16, y)
 		note:SetWidth(540)
 		note:SetJustifyH("LEFT")
-		note:SetText("TSM and Auctionator price everything instantly, anywhere in the world. " ..
+		note:SetText("TSM and Auctionator price every flower instantly, anywhere in the world. " ..
 			"The built-in scan needs no other addon, but has to query the auction house one item at a time.")
 		note:SetTextColor(0.7, 0.7, 0.7)
 		y = y - 32
+
+		-- Whichever source they pick, it prices flowers and only flowers. Said here
+		-- as well as on the Scan button, because this panel is the other place a
+		-- player goes looking when the dye prices they remember have gone.
+		if ns.DYES_TRADEABLE == false then
+			local warband = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+			warband:SetPoint("TOPLEFT", 16, y)
+			warband:SetWidth(540)
+			warband:SetJustifyH("LEFT")
+			warband:SetText("Flowers are all that any of them price. Dyes are Warband-bound, so they can't be bought or sold and have no auction price — the Cost column is what a dye costs to make instead.")
+			warband:SetTextColor(0.95, 0.8, 0.4)
+			y = y - 32
+		end
 
 		local rows = { { label = "Automatic — use the best one installed", value = "auto" } }
 		for _, source in ipairs(ns.PRICE_SOURCES) do

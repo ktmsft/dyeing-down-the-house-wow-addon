@@ -2,6 +2,31 @@
 
 All notable changes to Dyeing Down The House are recorded here.
 
+## [1.3.0] — 2026-08-04
+
+Dyes are Warband-bound as of this patch. They can't be traded or listed, so a dye
+has no auction price any more — but flowers still sell as they always did, and
+that's the half of the recipe you actually pay for.
+
+### Changed
+
+- **Scans price flowers only.** Querying a dye that can't be listed returns nothing,
+  and the auction API is rate limited — those wasted queries were coming out of the
+  budget the flowers needed. Same for TSM and Auctionator: neither has a dye price
+  to give.
+- **The Value column is now Cost** — what one of that dye costs to make, ten of the
+  cheapest flower of its color. Sorting on it puts the cheapest to make first.
+- **The expand view compares flowers against each other.** Green is the cheapest way
+  into that color, red is a dearer one. It used to mean "cheaper than buying the
+  dye", which is no longer a thing you can do.
+- Same change to the green check and red X in the pigment reagent picker: the check
+  marks the cheapest flower for the color you're milling for.
+- "Hide cost-prohibitive flowers" is now "Show only the cheapest flowers".
+- Dye prices saved before the patch are cleared on first login. They were priced
+  against a market that no longer exists, and a stale number is worse than none.
+- The first login after updating says all this in chat, once, for anyone who didn't
+  read the patch notes. It's also on the Scan button's tooltip and the Cost column's.
+
 ## [1.2.0] — 2026-07-21
 
 ### Added
