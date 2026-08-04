@@ -19,9 +19,9 @@ local ADDON, ns = ...
 ns.HERBS_PER_PIGMENT = ns.HERBS_PER_PIGMENT or 10
 ns.PIGMENTS_PER_DYE  = ns.PIGMENTS_PER_DYE  or 1
 
--- Dyes became Warband-bound in the 4 Aug 2026 patch: they can no longer be traded
--- or listed, so a dye has no buy price at all any more. Flowers and pigments are
--- unchanged and still sell normally.
+-- Dyes went Warband-bound in the 4 Aug 2026 patch, ahead of 12.1: they can no
+-- longer be traded or listed, so a dye has no buy price at all any more. Flowers
+-- and pigments are unchanged and still sell normally.
 --
 -- One flag rather than a dozen scattered `kind == "dye"` checks, because everything
 -- downstream has to agree with it: the scan queue, the price import, the Cost
@@ -947,7 +947,7 @@ function ns.StartAHScan(items)
 
 	scan.queue = ns.BuildScanQueue(items)
 	if #scan.queue == 0 then
-		return false, "nothing to price — every flower is hidden"
+		return false, "nothing to price: every flower is hidden"
 	end
 
 	scan.active = true
@@ -1652,8 +1652,8 @@ local function AnnounceWarbandDyes()
 	if not DyeingDownTheHouseDB.warbandNoticePending then return end
 	DyeingDownTheHouseDB.warbandNoticePending = false
 
-	Print("dyes are |cffffd100Warband-bound|r now — no auction price, so scans cover flowers only.")
-	Print("the |cffffd100Cost|r column is what a dye costs to make: ten of its cheapest flower.")
+	Print("heads up, housing dyes are |cffffd100Warband-bound|r now, in preparation for patch 12.1.")
+	Print("scans price flowers only from here; this addon will stay updated as things change!")
 end
 
 local refreshPending = false

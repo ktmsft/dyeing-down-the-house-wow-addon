@@ -52,7 +52,7 @@ A green check appears next to a goal once you're covered, counting dyes you hold
 
 ## 💰 Then it tells you the cheapest way to make it
 
-Dyes are Warband-bound — you can't buy one, so making it is the only route. But
+Dyes are Warband-bound, so you can't buy one and making it is the only route. But
 there are fifteen flowers that mill into black, they're all still on the auction
 house, and which one is cheapest changes week to week.
 
