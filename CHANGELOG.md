@@ -48,8 +48,10 @@ addon is rebuilt to match, which is why this is a 2.0.
   nine item IDs and which of the 77 colors belongs to which family at login,
   every session. Blizzard adding colors mid-patch now needs no update from me.
 - **A "Dye Needed" panel under the house dye window**, styled from the panel above
-  it. It reads the color you have selected, says which family it costs, and sets
-  that family's goal.
+  it. A row per color the decor is wearing — every dye slot, not just one — with
+  the shade's name, which family it costs, how many you hold account-wide, what
+  your flowers would make, and a box to set the goal. A color used by two slots
+  says "x2", because that's two dyes it'll spend.
 
 ### Known gaps
 
