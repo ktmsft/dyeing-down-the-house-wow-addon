@@ -58,10 +58,6 @@ local PANE_PATHS = {
 	{ "HouseEditorFrame", "DecorCustomizationsPane" },
 }
 
--- Names the "Cost" line has gone by; the box anchors above whichever exists. Not
--- finding one is survivable — the pane itself is the fallback anchor.
-local COST_FIELDS = { "DyeCostContainer", "CostContainer", "Cost", "DyeCost" }
-
 local function Follow(path)
 	local node = _G
 	for _, part in ipairs(path) do
@@ -218,24 +214,54 @@ local function Commit()
 	if ns.Refresh then ns.Refresh() end
 end
 
+-- Where to hang the box, best first. Each entry says which frame to anchor to and
+-- which way to grow from it.
+--
+-- The Cost line used to be the obvious anchor and is now the wrong one: 12.1's
+-- DyeCostContainer is 39x16, and growing a 40px box UPWARD from something that
+-- short lands it squarely on top of the Dye Slot 2 row. The panel has an obvious
+-- empty band between Cost and the Cancel/Apply buttons, so the box goes there —
+-- above the button frame, growing up into space nothing else uses.
+local ANCHORS = {
+	-- The button frame sits at the bottom of the outer customize pane. Anchoring
+	-- above it puts us in that empty band whatever the panel's height.
+	{ path = { "customizePane", "ButtonFrame" }, point = "BOTTOMLEFT", to = "TOPLEFT", x = 10, y = 12 },
+	-- Failing that, below the dye slots — still clear of them, may crowd Cost.
+	{ path = { "DyeSlotContainer" }, point = "TOPLEFT", to = "BOTTOMLEFT", x = 4, y = -8 },
+	-- Last resort: above the Cost line, the pre-12.1 position.
+	{ path = { "DyeCostContainer" }, point = "BOTTOMLEFT", to = "TOPLEFT", x = 4, y = 8 },
+}
+
+local function FollowFrom(root, path)
+	local node = root
+	for _, part in ipairs(path) do
+		local ok, nxt = pcall(function() return node[part] end)
+		if not ok or nxt == nil then return nil end
+		node = nxt
+	end
+	return node
+end
+
 local function EnsureBox(pane)
 	if box then return box end
+	-- Parented to the pane, but anchored to whichever frame ANCHORS finds. Both
+	-- descend from the same customize pane, so a cross-anchor is safe.
 	box = CreateFrame("Frame", nil, pane)
-	box:SetSize(170, 40)
+	box:SetSize(220, 34)
 
 	box.name = box:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	box.name:SetPoint("TOPLEFT", 0, 0)
-	box.name:SetWidth(170)
+	box.name:SetPoint("TOPRIGHT", 0, 0)
 	box.name:SetJustifyH("LEFT")
 	box.name:SetWordWrap(false)
 
 	box.label = box:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	box.label:SetPoint("TOPLEFT", 0, -16)
+	box.label:SetPoint("TOPLEFT", 0, -15)
 	box.label:SetText("Dye Needed")
 
 	box.edit = CreateFrame("EditBox", nil, box, "InputBoxTemplate")
-	box.edit:SetSize(46, 20)
-	box.edit:SetPoint("LEFT", box.label, "RIGHT", 10, 0)
+	box.edit:SetSize(46, 18)
+	box.edit:SetPoint("LEFT", box.label, "RIGHT", 12, 0)
 	box.edit:SetAutoFocus(false)
 	box.edit:SetNumeric(true)
 	box.edit:SetMaxLetters(5)
@@ -244,17 +270,17 @@ local function EnsureBox(pane)
 	box.edit:SetScript("OnEditFocusLost", Commit)
 	box.edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
-	-- Anchor the box just above the Cost line. Anchored TO the cost frame, so it
-	-- rides along if the panel relays out. The field has had several names across
-	-- builds; the pane itself is the fallback, which puts the box somewhere visible
-	-- rather than nowhere at all.
 	box:ClearAllPoints()
-	local anchor = pane
-	for _, field in ipairs(COST_FIELDS) do
-		local ok, candidate = pcall(function() return pane[field] end)
-		if ok and candidate then anchor = candidate; break end
+	for _, spot in ipairs(ANCHORS) do
+		local anchor = FollowFrom(pane, spot.path)
+		if anchor then
+			box:SetPoint(spot.point, anchor, spot.to, spot.x, spot.y)
+			return box
+		end
 	end
-	box:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 4, 8)
+	-- Nothing recognisable to hang it on. Sit at the pane's bottom-left rather than
+	-- unanchored, which would park it at the centre of the screen.
+	box:SetPoint("TOPLEFT", pane, "BOTTOMLEFT", 4, -8)
 	return box
 end
 
@@ -280,8 +306,14 @@ local function UpdatePanel()
 	local family = color:gsub("^%l", string.upper)
 	local label = dyeName and (dyeName ~= family) and ("%s  (%s)"):format(dyeName, family)
 		or family
-	local owned = tonumber(numOwned)
-	box.name:SetText(owned and ("%s  —  own %d"):format(label, owned) or label)
+
+	-- The count shown is OURS, not the panel's `numOwned`. Blizzard's is what this
+	-- character can reach; ours is every character, both banks and the Warband bank,
+	-- which is the number the goal beside it is measured against. Showing the
+	-- panel's here would put two different figures for one colour on one line and
+	-- make the goal look wrong.
+	local have = ns.GetTotal and ns.GetTotal(color) or tonumber(numOwned)
+	box.name:SetText(have and ("%s  —  have %d"):format(label, have) or label)
 
 	-- Don't stomp what the player is typing.
 	if not box.edit:HasFocus() then
