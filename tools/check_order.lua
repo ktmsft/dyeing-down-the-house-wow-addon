@@ -25,7 +25,7 @@
 -- Run: luajit tools/check_order.lua
 
 local FILES = { "Data.lua", "Core.lua", "Discover.lua", "Prices.lua", "UI.lua",
-	"Options.lua", "Housing.lua", "Probe.lua" }
+	"Options.lua", "Crafting.lua", "Housing.lua", "Probe.lua" }
 local root = (arg[0]:match("^(.*[/\\])") or "") .. ".."
 local sep = package.config:sub(1, 1)
 
@@ -52,7 +52,8 @@ local KNOWN_GLOBALS = {
 	C_HousingCustomizeMode = true, C_HousingDecor = true,
 	Enum = true, Constants = true,
 	-- hooks and misc
-	SlashCmdList = true, RunTimers = true,
+	SlashCmdList = true, RunTimers = true, hooksecurefunc = true,
+	OpenProfessionsItemFlyout = true, ProfessionsFrame = true,
 }
 
 -- Explicit paths override the addon's own files, so the check can be tested

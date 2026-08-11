@@ -16,5 +16,6 @@ Discover.lua
 Prices.lua
 UI.lua
 Options.lua
+Crafting.lua
 Housing.lua
 Probe.lua

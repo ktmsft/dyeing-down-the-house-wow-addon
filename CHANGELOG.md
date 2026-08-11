@@ -53,11 +53,12 @@ addon is rebuilt to match, which is why this is a 2.0.
   your flowers would make, and a box to set the goal. A color used by two slots
   says "x2", because that's two dyes it'll spend.
 
-### Known gaps
-
-- The dye station itself isn't decorated yet. The old crafting-window markers went
-  with the recipes; marking the cheapest flower at the station is the replacement
-  and isn't in this release.
+- **The dye station is marked up again.** The recipes didn't disappear in 12.1,
+  they moved out of your crafting book and into the station. So the markers are
+  back: a flag on any color you're short of, a "have X / need Y" line under the
+  recipe, and a green check on the cheapest flower to make that color out of. Ten
+  of one flower makes a dye and a color has up to fifteen to choose from, so that
+  last one is the only part of the decision the window doesn't help with.
 
 ## [1.3.0] — 2026-08-04
 

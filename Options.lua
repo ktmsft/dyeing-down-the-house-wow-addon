@@ -212,6 +212,14 @@ local function BuildPanel()
 		function(v) DyeingDownTheHouseDB.ui.showShades = v; ns.Refresh() end)
 		:SetPoint("TOPLEFT", 16 + COL2, y)
 	y = y - 26
+	MakeCheck(content, "Mark the cheapest flower at the dye station",
+		function() return DyeingDownTheHouseDB.ui.markHerbs end,
+		function(v)
+			DyeingDownTheHouseDB.ui.markHerbs = v
+			if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end
+		end)
+		:SetPoint("TOPLEFT", 16, y)
+	y = y - 26
 	MakeCheck(content, "Rainbow title  (off = plain)",
 		function() return DyeingDownTheHouseDB.ui.rainbowTitle end,
 		function(v)

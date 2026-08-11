@@ -169,6 +169,8 @@ local defaults = {
 		rainbowTitle = true, -- flashy rainbow name (off = plain)
 		housingGoalInput = true, -- show the "Dye Needed" box in the house dye panel
 		showShades = true, -- list a family's color names when its row is opened
+		markHerbs = true, -- green check / red X on flowers in the station's reagent
+		                  -- picker (check = cheapest flower for that color)
 	},
 }
 

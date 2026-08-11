@@ -36,6 +36,9 @@ local ADDON, ns = ...
 --            frames; this reads what's inside them. Use it when a section above
 --            says it found the frame but not the field -- a filtered dump can only
 --            show you the names you already guessed.
+--   station  the Dye Station's crafting window: the paths Crafting.lua hooks, the
+--            shape of a recipe row, and the schematic panel. Open the station
+--            first.
 --   api      the Enums and C_ namespaces behind the dye system. THIS IS THE ONE TO
 --            REACH FOR FIRST. Frame-scraping was only ever a way in because I
 --            didn't know a dyeColorCategoryID existed; now that categories are
@@ -951,6 +954,106 @@ local function ProbeApi()
 end
 
 --------------------------------------------------------------------------------
+-- Section: station — the Dye Station's crafting window
+--
+-- The station opens an ordinary Professions-style window titled "Dye Crafting"
+-- with the nine dyes in it. Crafting.lua hooks the shapes it has always hooked, on
+-- the reading that this IS the Professions frame; this section is how that reading
+-- gets checked rather than assumed, because assuming it is exactly what cost this
+-- addon its housing panel earlier in the same release.
+--------------------------------------------------------------------------------
+
+local STATION_PATHS = {
+	"ProfessionsFrame",
+	"ProfessionsFrame.CraftingPage",
+	"ProfessionsFrame.CraftingPage.RecipeList",
+	"ProfessionsFrame.CraftingPage.RecipeList.ScrollBox",
+	"ProfessionsFrame.CraftingPage.SchematicForm",
+	"ProfessionsFrame.CraftingPage.SchematicForm.OutputText",
+	"ProfessionsFrame.CraftingPage.CreateButton",
+	"OpenProfessionsItemFlyout",
+}
+
+local function ProbeStation()
+	W("== station ==")
+	W("Open a Dye Station's crafting window first, then run this.")
+	W("")
+
+	W("-- paths Crafting.lua depends on --")
+	for _, path in ipairs(STATION_PATHS) do
+		local value, missing = Resolve(path)
+		if value ~= nil then
+			W("  OK    %s  (%s)", path,
+				type(value) == "table" and TypeOf(value) or type(value))
+		else
+			W("  GONE  %s  (stops at '%s')", path, tostring(missing))
+		end
+	end
+	W("")
+
+	W("-- is Blizzard_Professions even loaded? --")
+	if C_AddOns and C_AddOns.IsAddOnLoaded then
+		W("  Blizzard_Professions: %s",
+			tostring(Try(C_AddOns.IsAddOnLoaded, "Blizzard_Professions")))
+	else
+		W("  C_AddOns unavailable")
+	end
+	W("")
+
+	W("-- recipe rows, and what each one carries --")
+	local sb = Resolve("ProfessionsFrame.CraftingPage.RecipeList.ScrollBox")
+	if not sb then
+		W("  no recipe list found. If the window is open, this is NOT the Professions")
+		W("  frame and Crafting.lua is hooking the wrong thing -- send the shape search")
+		W("  below.")
+	else
+		local frames = Try(function() return sb:GetFrames() end)
+		if type(frames) ~= "table" or #frames == 0 then
+			W("  the list exists but has no rows right now")
+		else
+			W("  %d rows", #frames)
+			for i = 1, math.min(#frames, 4) do
+				local ed = Try(function() return frames[i]:GetElementData() end)
+				DumpValue(("row[%d].elementData"):format(i), ed, 2, 4)
+			end
+		end
+	end
+	W("")
+
+	W("-- the schematic panel --")
+	local sf = Resolve("ProfessionsFrame.CraftingPage.SchematicForm")
+	if not sf then
+		W("  not found")
+	else
+		local ri = Try(function() return sf:GetRecipeInfo() end)
+		DumpValue("GetRecipeInfo()", ri, 1, 3)
+		-- Where our have/need line anchors, and where the reagent rows live.
+		for _, field in ipairs({ "OutputText", "Reagents", "reagentSlots", "Description" }) do
+			local v = Get(sf, field)
+			W("  %-14s %s", field, v ~= nil and (IsFrame(v) and TypeOf(v) or type(v)) or "absent")
+		end
+	end
+	W("")
+
+	W("-- anything that LOOKS like a crafting window, by shape --")
+	-- Same trick as the panel section: if the paths above are gone, this says what
+	-- replaced them without needing to know its name.
+	local hits, scanned = FindByShape()
+	W("   (scanned %d frames)", scanned or 0)
+	local shown = 0
+	for _, hit in ipairs(hits) do
+		local path = PathTo(hit.frame)
+		if path:lower():find("craft") or path:lower():find("recipe")
+			or path:lower():find("profession") or path:lower():find("schematic") then
+			shown = shown + 1
+			if shown <= 8 then W("  [%d] %s", hit.score, path) end
+		end
+	end
+	if shown == 0 then W("   nothing crafting-shaped scored above the threshold") end
+	W("")
+end
+
+--------------------------------------------------------------------------------
 -- Output window — a plain selectable editbox, because chat can't be copied out of
 --------------------------------------------------------------------------------
 
@@ -1019,8 +1122,9 @@ function ns.RunProbe(section)
 	if section == "" or section == "swatches" then ProbeSwatches(); ran = true end
 	if section == "" or section == "deep"     then ProbeDeep();     ran = true end
 	if section == "" or section == "api"      then ProbeApi();      ran = true end
+	if section == "" or section == "station"  then ProbeStation();  ran = true end
 	if not ran then
-		W("unknown section '%s'. Try: api, addons, items, panel, swatches, deep, or nothing for all.", section)
+		W("unknown section '%s'. Try: api, addons, items, panel, swatches, deep, station, or nothing for all.", section)
 	end
 
 	ShowOutput(table.concat(out, "\n"))
