@@ -1399,6 +1399,50 @@ check("sorting by goal sees it too", keys(ns.SortDyes(ns.DYES, "goal")), "blue,g
 DyeingDownTheHouseDB.goals = {}
 DyeingDownTheHouseDB.unassigned = {}
 
+--------------------------------------------------------------------------------
+-- Refusing to migrate an old client
+--
+-- The migration is one-way: it drops pre-12.1 dye and pigment counts and rekeys
+-- goals. Right on 12.1, destructive on 12.0.7 where those items still exist -- and
+-- a player who installed this early would find 1.3.0's data gone when they went
+-- back. So the client version is checked, and an old one is left alone entirely.
+--------------------------------------------------------------------------------
+
+print("\n-- An old client is not migrated --")
+local realBuildInfo = GetBuildInfo
+function GetBuildInfo() return "12.0.7", "68974", "Aug 2026", 120007 end
+check("the client reports as unsupported", ns.ClientSupported(), false)
+
+-- A profile exactly as 1.3.0 would have left it.
+DyeingDownTheHouseDB = {
+	version = 2,
+	goals = { hordered = 5 },
+	warband = { hordered = 9, rose = 20 },
+	ui = {},
+}
+Fire("ADDON_LOADED", "DyeingDownTheHouse")
+check("the schema is left where it was", DyeingDownTheHouseDB.version, 2)
+check("goals are untouched", DyeingDownTheHouseDB.goals.hordered, 5)
+check("counts are untouched", DyeingDownTheHouseDB.warband.hordered, 9)
+
+-- Defaults still apply: they are additive, and an older build simply ignores
+-- keys it does not know. Only the rewrite is withheld.
+check("new defaults are still filled in", type(DyeingDownTheHouseDB.unassigned), "table")
+
+print("\n-- A 12.1 client migrates as normal --")
+function GetBuildInfo() return "12.1.0", "69214", "Aug 2026", 120100 end
+check("the client reports as supported", ns.ClientSupported(), true)
+Fire("ADDON_LOADED", "DyeingDownTheHouse")
+check("now it migrates", DyeingDownTheHouseDB.version, 4)
+check("...and the goal moved with it", ns.GetGoal("red"), 5)
+
+print("\n-- An unreadable version counts as supported --")
+-- Refusing to run because the version could not be READ would be worse than the
+-- thing being guarded against.
+GetBuildInfo = nil
+check("no GetBuildInfo means carry on", ns.ClientSupported(), true)
+GetBuildInfo = realBuildInfo
+
 print("\n-- v2 -> v3 migration --")
 
 -- A profile as it stood before the patch: real pre-12.1 keys, of colors the fixture

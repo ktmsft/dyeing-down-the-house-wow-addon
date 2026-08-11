@@ -734,6 +734,35 @@ function ns.Refresh()
 		h.fs:SetTextColor(on and ACCENT[1] or 0.75, on and ACCENT[2] or 0.75, on and ACCENT[3] or 0.75)
 	end
 
+	-- An old client gets one line saying so and nothing else. Drawing the normal
+	-- list would show nine colors it has never heard of with zero of each, which
+	-- reads as the addon being broken rather than as the addon being for a patch
+	-- that hasn't arrived.
+	if ns.ClientSupported and not ns.ClientSupported() then
+		for i = 1, MAXROWS do
+			local row = rows[i]
+			if i == 1 then
+				row.entryKind, row.color = "notice", nil
+				SetSubMode(row, nil, true)
+				row.fIcon:Hide()
+				row.fName:Show()
+				row.fName:ClearAllPoints()
+				row.fName:SetPoint("LEFT", row, "LEFT", 14, 0)
+				row.fName:SetText("This version needs Curse of Ula'tek (12.1).")
+				row.fName:SetTextColor(0.95, 0.7, 0.4)
+				row.fDetail:Show()
+				row.fDetail:ClearAllPoints()
+				row.fDetail:SetPoint("TOPLEFT", row.fName, "BOTTOMLEFT", 0, -2)
+				row.fDetail:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+				row.fDetail:SetText("Your saved goals are untouched. Use 1.3.0 until it goes live.")
+				row:Show()
+			else
+				row:Hide()
+			end
+		end
+		return
+	end
+
 	-- Build the flat entry list: one color row per family, and when a family is open,
 	-- its flowers followed by the shades it paints.
 	local hideCostly = DyeingDownTheHouseDB.ui.hideCostlyFlowers

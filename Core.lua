@@ -124,6 +124,39 @@ ns.OpenOptions     = ns.OpenOptions     or function() end
 --------------------------------------------------------------------------------
 
 -- 2: dyes went Warband-bound, so every stored dye price is now junk (see Migrate).
+--------------------------------------------------------------------------------
+-- Is this client new enough?
+--
+-- 2.0 is built for Curse of Ula'tek. Its migration rewrites a profile one way:
+-- pre-12.1 dye and pigment counts are dropped, goals are rekeyed onto colors and
+-- then onto shades. On a 12.1 client that is exactly right. On a 12.0.7 one it is
+-- a profile shredded for no reason — the items it deletes still exist there, and
+-- going back to 1.3.0 afterwards would find its data gone.
+--
+-- So the version is CHECKED rather than assumed, and on an old client the addon
+-- touches nothing: no migration, no counting, and the window says why instead of
+-- showing nine colors the client has never heard of and zero of each. An addon
+-- that quietly reports zeros is indistinguishable from one that is broken.
+--
+-- An unknown version counts as supported. GetBuildInfo is absent in the test
+-- harness and could be absent on some client this was never tried on; refusing to
+-- run because a version could not be READ would be worse than the thing being
+-- guarded against.
+--------------------------------------------------------------------------------
+
+ns.MIN_TOC = 120100 -- Curse of Ula'tek
+
+function ns.ClientTOC()
+	if type(GetBuildInfo) ~= "function" then return nil end
+	local ok, toc = pcall(function() return select(4, GetBuildInfo()) end)
+	return (ok and tonumber(toc)) or nil
+end
+
+function ns.ClientSupported()
+	local toc = ns.ClientTOC()
+	return (toc == nil) or (toc >= ns.MIN_TOC)
+end
+
 -- 3: 12.1 replaced 62 dye items and 10 pigments with nine, so every key that named
 --    one of them has to be rewritten to its color (see Migrate).
 -- 4: goals moved from the nine families onto the 77 shade names, so the old
@@ -2073,7 +2106,12 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		if isDev then DyeingDownTheHouseDB = DyeingDownTheHouseDevDB end
 		DyeingDownTheHouseDB = DyeingDownTheHouseDB or {}
 		ApplyDefaults(DyeingDownTheHouseDB, defaults)
-		Migrate(DyeingDownTheHouseDB)
+		-- Defaults are additive and harmless on any client; the MIGRATION is the
+		-- one-way part, so it is the part an old client must not run. Skipping it
+		-- leaves the profile exactly as 1.3.0 left it, still readable by 1.3.0.
+		if ns.ClientSupported() then
+			Migrate(DyeingDownTheHouseDB)
+		end
 		if isDev then DyeingDownTheHouseDevDB = DyeingDownTheHouseDB end   -- persist to the dev saved variable
 
 		local name, realm = UnitFullName("player")
