@@ -769,6 +769,33 @@ local cm, cd = ns.GetSort()
 check("sort back to alpha", cm, "alpha")
 check("direction back to asc", cd, "asc")
 
+print("\n-- Hiding colors you hold none of --")
+-- The command that toggles this printed a confident message and filtered
+-- nothing at all, which is worse than not having it: the list looked broken
+-- rather than filtered. Guarded here so it stays wired up.
+DyeingDownTheHouseDB.ui.hiddenDyes = {}
+DyeingDownTheHouseDB.goals = {}
+DyeingDownTheHouseDB.unassigned = {}
+ns.ClearFilters()
+-- Held: red 465 (Riker's stack), everything else 0.
+DyeingDownTheHouseDB.ui.hideZero = true
+check("colors you hold none of drop out", keys(ns.GetDisplayDyes()), "red")
+
+-- A colour you have a GOAL for stays, held or not. "Hide what I have none of"
+-- cannot sensibly mean "hide the ones I still need to make".
+ns.SetShadeGoal("Azure", 4)
+check("a color with a goal stays visible", keys(ns.GetDisplayDyes()), "blue,red")
+ns.SetShadeGoal("Azure", 0)
+
+DyeingDownTheHouseDB.ui.hideZero = false
+check("turning it off brings them all back", #ns.GetDisplayDyes(), 4)
+
+-- It is a By Color notion: a shade has nothing to hold, so the other tab is
+-- unaffected by it.
+DyeingDownTheHouseDB.ui.hideZero = true
+check("the shade list is untouched", #ns.GetDisplayShades() > 0, true)
+DyeingDownTheHouseDB.ui.hideZero = false
+
 print("\n-- Per-color hide list --")
 ns.SetDyeHidden("blue", true)
 check("hidden color is dropped from the display", keys(ns.SortDyes(ns.GetDisplayDyes(), "alpha")), "green,red,white")

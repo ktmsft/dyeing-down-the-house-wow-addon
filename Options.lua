@@ -80,6 +80,65 @@ local function MakeRadio(parent, label, value, get, set)
 	return cb
 end
 
+-- A labelled slider. Templates are Blizzard's and can be renamed between patches,
+-- so each is tried in turn and a bare Slider is the floor — the same treatment
+-- MakeRadio gives UIRadioButtonTemplate. A missing template must cost a nice
+-- widget, never the whole options panel.
+local function MakeSlider(parent, label, minV, maxV, step, get, set)
+	local slider
+	for _, template in ipairs({ "UISliderTemplateWithLabels", "OptionsSliderTemplate" }) do
+		local made = pcall(function()
+			slider = CreateFrame("Slider", nil, parent, template)
+		end)
+		if made and slider then break end
+		slider = nil
+	end
+	if not slider then
+		slider = CreateFrame("Slider", nil, parent)
+		slider:SetOrientation("HORIZONTAL")
+	end
+
+	slider:SetSize(200, 16)
+	pcall(function()
+		slider:SetMinMaxValues(minV, maxV)
+		slider:SetValueStep(step)
+		slider:SetObeyStepOnDrag(true)
+	end)
+
+	local title = slider:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	title:SetPoint("BOTTOMLEFT", slider, "TOPLEFT", 0, 4)
+
+	local readout = slider:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	readout:SetPoint("LEFT", slider, "RIGHT", 10, 0)
+
+	local function Show(value)
+		title:SetText(label)
+		readout:SetText(("%d%%"):format(math.floor(value * 100 + 0.5)))
+	end
+
+	slider:SetScript("OnValueChanged", function(self, value)
+		-- Snap to the step: a drag reports fractions between steps, and storing
+		-- 0.8499999 makes the readout disagree with itself between sessions.
+		value = math.floor(value / step + 0.5) * step
+		Show(value)
+		set(value)
+	end)
+
+	-- Set the value AFTER the handler exists, so the readout is right on first draw
+	-- without needing the player to touch it.
+	local current = get()
+	pcall(slider.SetValue, slider, current)
+	Show(current)
+
+	checks[#checks + 1] = { cb = slider, get = get,
+		-- RefreshChecks calls :SetChecked on everything it holds; a slider has no
+		-- such method, so it carries its own no-op rather than being special-cased
+		-- at the call site.
+		}
+	slider.SetChecked = function(self, value) pcall(self.SetValue, self, value) end
+	return slider
+end
+
 local function SectionHeader(parent, text)
 	local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	fs:SetText(text)
@@ -228,7 +287,16 @@ local function BuildPanel()
 			if ns.ApplyTitleColor then ns.ApplyTitleColor() end
 		end)
 		:SetPoint("TOPLEFT", 16, y)
-	y = y - 36
+	y = y - 40
+
+	MakeSlider(content, "Window opacity", ns.OPACITY_MIN or 0.2, 1.0, 0.05,
+		function() return tonumber(DyeingDownTheHouseDB.ui.opacity) or 1 end,
+		function(v)
+			DyeingDownTheHouseDB.ui.opacity = v
+			if ns.ApplyOpacity then ns.ApplyOpacity() end
+		end)
+		:SetPoint("TOPLEFT", 20, y)
+	y = y - 42
 
 	-- Where prices come from ------------------------------------------------
 	-- Guarded on ns.PRICE_SOURCES so the panel still builds if Prices.lua is absent;

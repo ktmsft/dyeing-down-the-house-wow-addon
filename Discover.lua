@@ -159,7 +159,14 @@ function ns.DiscoverDyes()
 				else
 					-- A shade Data.lua has never heard of. Blizzard adding colours
 					-- mid-patch is exactly the case this whole file exists to absorb.
-					shade = { name = info.name, color = color, dyeColorID = info.ID }
+					-- `key` is set here as well as by RebuildLookups: a shade added
+					-- mid-pass is reachable through ns.SHADE_BY_COLORID immediately, and
+					-- anything reading its goal before the rebuild would look one up
+					-- under a nil key and quietly get nothing.
+					shade = {
+						name = info.name, key = info.name:lower(),
+						color = color, dyeColorID = info.ID,
+					}
 					ns.SHADES[#ns.SHADES + 1] = shade
 					ns.shadeByName[info.name:lower()] = shade
 				end

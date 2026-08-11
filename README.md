@@ -99,7 +99,8 @@ how far off your goal you are.
 ## ⚙️ Configurable
 
 Everything lives in one options panel. Pick your columns, show only the cheapest
-flowers, lock the window, toggle the rainbow title.
+flowers, lock the window, toggle the rainbow title, and set how see-through the
+window is if you'd rather look at the house through it.
 
 Two collapsible checklists trim the list to what you care about: the nine colors
 with swatches and a count of the shades each one paints, and every flower by name.

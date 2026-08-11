@@ -169,7 +169,9 @@ local defaults = {
 		locked = false,
 		scale = 1.0,
 		hideZero = false,
-		showGoals = true,
+		-- Window opacity. 1.0 is the look everyone has had until now and stays the
+		-- default; the floor is 0.2 rather than 0 so the window can never be made
+		-- invisible and then impossible to find in order to turn it back up.
 		opacity = 1.0,
 		search = "",       -- name filter
 		sort = "alpha",    -- see VALID_SORT
@@ -1684,7 +1686,12 @@ function ns.GetDisplayDyes()
 	local hidden = ui.hiddenDyes or {}
 	local shown = {}
 	for _, d in ipairs(ns.FilterDyes(ui.search)) do
-		if not hidden[d.key] then shown[#shown + 1] = d end
+		-- `hideZero` drops colours you hold none of. A colour you have a GOAL for
+		-- stays regardless: "hide what I have none of" cannot reasonably mean "hide
+		-- the ones I still need", which is the list's whole purpose.
+		local drop = hidden[d.key]
+			or (ui.hideZero and ns.GetTotal(d.key) == 0 and ns.GetGoal(d.color) == 0)
+		if not drop then shown[#shown + 1] = d end
 	end
 	return ns.SortDyes(shown, ui.sort, ui.sortDir)
 end
@@ -2142,7 +2149,8 @@ SlashCmdList.DYEINGDOWNTHEHOUSE = function(msg)
 	elseif cmd == "hidezero" then
 		DyeingDownTheHouseDB.ui.hideZero = not DyeingDownTheHouseDB.ui.hideZero
 		ns.Refresh()
-		Print("rows with zero dye are now " .. (DyeingDownTheHouseDB.ui.hideZero and "hidden" or "shown") .. ".")
+		Print(("colors you hold none of are now %s on the By Color tab (ones with a goal always show)."):format(
+			DyeingDownTheHouseDB.ui.hideZero and "hidden" or "shown"))
 	elseif cmd == "search" or cmd == "find" then
 		ns.SetSearch(rawRest)
 		if rawRest == "" then

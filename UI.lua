@@ -141,6 +141,23 @@ local function ActivePriceSource()
 	return ok and source or nil
 end
 
+-- Window opacity, clamped so it can never be set to invisible. Exposed so the
+-- options slider can apply it live, and called on every Show and RestorePosition
+-- so a saved value survives a reload.
+--
+-- Applied to the FRAME, which fades its children with it. That is the intent —
+-- "make the window less in the way" means all of it, not a translucent backdrop
+-- with fully opaque text still sitting on top of the house.
+ns.OPACITY_MIN = 0.2
+
+function ns.ApplyOpacity()
+	if not frame then return end
+	local value = tonumber(DyeingDownTheHouseDB.ui.opacity) or 1
+	if value < ns.OPACITY_MIN then value = ns.OPACITY_MIN end
+	if value > 1 then value = 1 end
+	frame:SetAlpha(value)
+end
+
 -- Rainbow or plain title, per the ui.rainbowTitle toggle. Exposed so the options
 -- checkbox can re-apply it live.
 function ns.ApplyTitleColor()
@@ -1278,6 +1295,7 @@ function ns.BuildUI()
 
 	ns.RestorePosition()
 	ns.ApplyColumnLayout()
+	ns.ApplyOpacity()
 	Layout()
 	if DyeingDownTheHouseDB.ui.collapsed then ns.SetCollapsed(true) end
 end
@@ -1331,6 +1349,7 @@ function ns.RestorePosition()
 	frame:ClearAllPoints()
 	frame:SetPoint(ui.point or "CENTER", UIParent, ui.relPoint or "CENTER", ui.x or 0, ui.y or 0)
 	frame:SetScale(ui.scale or 1.0)
+	ns.ApplyOpacity()
 	Layout()
 end
 
