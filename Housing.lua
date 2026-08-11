@@ -37,13 +37,25 @@ local ADDON, ns = ...
 local box            -- our editbox container, created once against the pane
 local THROTTLE = 0.2 -- seconds between panel polls (cheap; bails instantly off-house)
 
--- Where the decor customize pane has been known to live. First hit wins. Add to
--- this rather than editing it: a client on the old build should keep working.
+-- Where the dye pane has been known to live. First hit wins. Add to this rather
+-- than editing it: a client on an older build should keep working.
+--
+-- 12.1 did not move DecorCustomizationsPane — it pushed a CustomizeComponentContainer
+-- underneath it and moved every dye field down into a DyePane inside that. So the
+-- old path still resolves and its contents are all gone, which is exactly the shape
+-- of failure that reads as "the addon broke" rather than "Blizzard moved a frame".
+--
+-- `activeModeFrame` is tried first: it's whichever mode frame is currently up, so
+-- it keeps working if the dye panel ever appears in another mode. CustomizeModeFrame
+-- is the same object today and is kept as the named fallback.
 local PANE_PATHS = {
+	{ "HouseEditorFrame", "activeModeFrame", "DecorCustomizationsPane",
+		"CustomizeComponentContainer", "DyePane" },
+	{ "HouseEditorFrame", "CustomizeModeFrame", "DecorCustomizationsPane",
+		"CustomizeComponentContainer", "DyePane" },
+	-- pre-12.1: the pane itself carried the dye fields
 	{ "HouseEditorFrame", "CustomizeModeFrame", "DecorCustomizationsPane" },
-	{ "HouseEditorFrame", "CustomizeModeFrame", "DyeCustomizationsPane" },
 	{ "HouseEditorFrame", "DecorCustomizationsPane" },
-	{ "HousingDyeFrame" },
 }
 
 -- Names the "Cost" line has gone by; the box anchors above whichever exists. Not
@@ -69,20 +81,84 @@ local function GetPane()
 	return nil
 end
 
--- The dye currently selected in the active slot: item id, owned count, name.
+-- Fields an info table might carry the dye's identity under, in the order they're
+-- worth trusting. Item ID first: it's read off the item and can't be misspelled.
+local ID_FIELDS   = { "itemID", "itemId", "dyeItemID" }
+local NAME_FIELDS = { "name", "colorName", "dyeName", "dyeColorName" }
+local OWNED_FIELDS = { "numOwned", "owned", "quantity", "count" }
+
+local function FirstField(info, fields)
+	for _, field in ipairs(fields) do
+		local ok, value = pcall(function() return info[field] end)
+		if ok and value ~= nil then return value end
+	end
+	return nil
+end
+
+-- Pull identity out of one info table, whatever it happens to be called.
+local function ReadInfo(info)
+	if type(info) ~= "table" then return nil end
+	local itemID = FirstField(info, ID_FIELDS)
+	local name = FirstField(info, NAME_FIELDS)
+	if itemID == nil and name == nil then return nil end
+	return itemID, FirstField(info, OWNED_FIELDS), name
+end
+
+-- The dye currently selected: item id, owned count, name.
 --
--- The shapes differ between builds, so this reads whichever of them answers rather
--- than insisting on one. Anything missing comes back nil and the caller copes.
+-- `currentChannel` is gone in 12.1 with nothing obviously in its place, so rather
+-- than guess at a replacement this walks every dye slot and takes the first that
+-- actually holds a dye. A decor has two slots and a goal is per-COLOR now, so
+-- picking the wrong one of two slots that both hold blue costs nothing — where
+-- guessing a field name that doesn't exist costs the whole feature, which is what
+-- 12.1 just did to it.
+--
+-- The slot frames are reachable two ways (a keyed table and a container's children)
+-- and both are tried, because the keyed one is the field most likely to be renamed
+-- next and the children are structural.
 local function CurrentDye(pane)
 	local ok, itemID, numOwned, name = pcall(function()
-		local ch = pane.currentChannel or pane.currentDyeSlot or 1
-		local slots = pane.dyeSlotFramesByChannel or pane.dyeSlotFrames
-		local slot = (ch and slots and slots[ch]) or pane.SelectedDyeSlot
-		local swatch = slot and (slot.CurrentSwatch or slot.Swatch)
-		local info = (swatch and (swatch.dyeColorInfo or swatch.colorInfo))
-			or pane.selectedDyeColorInfo
-		if not info then return nil end
-		return info.itemID, info.numOwned, info.name or info.colorName
+		local slots = {}
+
+		local byChannel = pane.dyeSlotFramesByChannel or pane.dyeSlotFrames
+		if type(byChannel) == "table" then
+			for _, slot in pairs(byChannel) do slots[#slots + 1] = slot end
+		end
+		local container = pane.DyeSlotContainer
+		if container and type(container.GetChildren) == "function" then
+			for _, child in ipairs({ container:GetChildren() }) do
+				slots[#slots + 1] = child
+			end
+		end
+
+		for _, slot in ipairs(slots) do
+			-- The slot's own info, then its swatch's. Either can carry the identity
+			-- depending on whether the slot has been painted yet.
+			local swatch = slot.CurrentSwatch or slot.Swatch
+			for _, info in ipairs({
+				slot.dyeSlotInfo,
+				swatch and swatch.dyeColorInfo,
+				swatch and swatch.colorInfo,
+				swatch and swatch.dyeSlotInfo,
+			}) do
+				local id, owned, nm = ReadInfo(info)
+				if id ~= nil or nm ~= nil then return id, owned, nm end
+			end
+		end
+
+		-- A getter beats any of it when it's there: GetPreviewDyeInfos returns what
+		-- the panel is actually about to apply.
+		if type(pane.GetPreviewDyeInfos) == "function" then
+			local infos = pane:GetPreviewDyeInfos()
+			if type(infos) == "table" then
+				for _, info in pairs(infos) do
+					local id, owned, nm = ReadInfo(info)
+					if id ~= nil or nm ~= nil then return id, owned, nm end
+				end
+			end
+		end
+
+		return nil
 	end)
 	if not ok then return nil end
 	return itemID, numOwned, name

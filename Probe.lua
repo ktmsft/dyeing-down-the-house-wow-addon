@@ -32,6 +32,10 @@ local ADDON, ns = ...
 --   swatches the color swatch grid: every shade the panel offers and, where the
 --            grid carries one, the dye item it costs. That's the shade -> family
 --            map, read from the game rather than inferred from the color's name.
+--   deep     the dye tables dumped in FULL, every key. The scored search finds the
+--            frames; this reads what's inside them. Use it when a section above
+--            says it found the frame but not the field -- a filtered dump can only
+--            show you the names you already guessed.
 --
 -- OPEN A DECOR'S DYE PANEL BEFORE RUNNING panel OR swatches. A load-on-demand
 -- frame that hasn't loaded doesn't exist to be found, and the probe cannot tell
@@ -79,6 +83,9 @@ local WEAK_WORDS = { "dye", "colorpicker", "colorgrid", "hideunavailable" }
 
 -- The paths Housing.lua depends on. Each is checked and reported hit or miss, so
 -- the output says which link in the chain broke rather than just "nothing found".
+-- The pre-12.1 chain is kept in full, because "the pane is fine and its contents
+-- are gone" is a much more useful report than "not found" -- that is exactly what
+-- 12.1 did, and it's what made this read as an addon bug rather than a moved frame.
 local EXPECTED = {
 	"HouseEditorFrame",
 	"HouseEditorFrame.CustomizeModeFrame",
@@ -86,6 +93,15 @@ local EXPECTED = {
 	"HouseEditorFrame.CustomizeModeFrame.DecorCustomizationsPane.currentChannel",
 	"HouseEditorFrame.CustomizeModeFrame.DecorCustomizationsPane.dyeSlotFramesByChannel",
 	"HouseEditorFrame.CustomizeModeFrame.DecorCustomizationsPane.DyeCostContainer",
+	-- where 12.1 actually put them
+	"HouseEditorFrame.activeModeFrame",
+	"HouseEditorFrame.CustomizeModeFrame.DecorCustomizationsPane.CustomizeComponentContainer",
+	"HouseEditorFrame.CustomizeModeFrame.DecorCustomizationsPane.CustomizeComponentContainer.DyePane",
+	"HouseEditorFrame.CustomizeModeFrame.DecorCustomizationsPane.CustomizeComponentContainer.DyePane.DyeCostContainer",
+	"HouseEditorFrame.CustomizeModeFrame.DecorCustomizationsPane.CustomizeComponentContainer.DyePane.dyeSlotFramesByChannel",
+	"HouseEditorFrame.CustomizeModeFrame.DecorCustomizationsPane.CustomizeComponentContainer.DyePane.DyeSlotContainer",
+	"DyeSelectionPopout",
+	"DyeSelectionPopout.DyeSlotScrollBox",
 }
 
 -- Globals still worth trying by name first: it costs nothing, and if one of them
@@ -152,11 +168,18 @@ local function NameOf(frame)
 end
 
 -- Item ID out of anything that might carry one: a number, a link, an info table.
+--
+-- `ID` is deliberately NOT read as an item ID. The first run of this reported
+-- itemID=1273 and 1274 off the swatch tables, and GetItemInfo had nothing for
+-- either — they're dye colour record IDs, and a plain `ID` field means whatever the
+-- table it sits on decides it means. Guessing it was an item ID would have put two
+-- fabricated IDs into Data.lua, which is the precise failure this whole file exists
+-- to prevent.
 local function ItemIDFrom(value)
 	if type(value) == "number" then return value end
 	if type(value) == "string" then return tonumber(value:match("item:(%d+)")) end
 	if type(value) == "table" then
-		for _, field in ipairs({ "itemID", "itemId", "ID" }) do
+		for _, field in ipairs({ "itemID", "itemId", "dyeItemID" }) do
 			local v = Get(value, field)
 			if type(v) == "number" then return v end
 		end
@@ -168,6 +191,17 @@ end
 
 local function NameForID(itemID)
 	return Try(C_Item.GetItemInfo, itemID)
+end
+
+-- An item ID is only reportable once the client agrees it names an item. Anything
+-- else is a number that happened to be lying nearby. Declared after NameForID
+-- rather than beside ItemIDFrom, because a local called above its declaration
+-- silently compiles to a global lookup (see tools/check_order.lua).
+local function ConfirmedItem(itemID)
+	if not itemID then return nil end
+	local name = NameForID(itemID)
+	if type(name) == "string" and name ~= "" then return name end
+	return nil
 end
 
 --------------------------------------------------------------------------------
@@ -492,14 +526,193 @@ local function ProbeSwatches()
 
 	local rows = SwatchRows()
 	if #rows == 0 then
-		W("  no swatch data found. If the grid was on screen, send the 'panel'")
-		W("  output instead -- the field names will be in the tree.")
+		W("  no swatch data found. If the grid was on screen, send the 'deep'")
+		W("  output instead -- it dumps the tables in full, field names and all.")
 	else
 		table.sort(rows, function(a, b) return a.name < b.name end)
 		W("  %-30s %-12s %-10s %s", "shade", "dyeColorID", "itemID", "item name")
 		for _, row in ipairs(rows) do
+			local confirmed = ConfirmedItem(row.itemID)
 			W("  %-30s %-12s %-10s %s", row.name, row.colorID,
-				tostring(row.itemID), row.itemID and (NameForID(row.itemID) or "?") or "")
+				confirmed and tostring(row.itemID) or "-",
+				confirmed or (row.itemID and "(not an item: " .. row.itemID .. ")" or ""))
+		end
+	end
+	W("")
+end
+
+--------------------------------------------------------------------------------
+-- Section: deep — dump the dye tables in full, field names and all
+--
+-- The scored search finds the frames; this reads what's actually inside them. It
+-- prints EVERY key rather than a filtered selection, because the whole problem is
+-- not knowing what the fields are called any more — a filter can only show you the
+-- names you already guessed.
+--------------------------------------------------------------------------------
+
+local MAX_KEYS = 60
+
+local function DumpValue(label, value, indent, depth)
+	local pad = ("  "):rep(indent)
+	local tv = type(value)
+
+	if tv ~= "table" then
+		W("%s%s = %s", pad, label, tostring(value))
+		return
+	end
+	if IsFrame(value) then
+		W("%s%s = <%s %s>", pad, label, TypeOf(value), NameOf(value) or "anon")
+		return
+	end
+	if depth <= 0 then
+		W("%s%s = {...}", pad, label)
+		return
+	end
+
+	local keys = {}
+	pcall(function()
+		for k in pairs(value) do keys[#keys + 1] = k end
+	end)
+	if #keys == 0 then
+		W("%s%s = {}", pad, label)
+		return
+	end
+	table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+	W("%s%s = {", pad, label)
+	for i, k in ipairs(keys) do
+		if i > MAX_KEYS then W("%s  ...and %d more", pad, #keys - MAX_KEYS); break end
+		local v = Get(value, k)
+		if type(v) ~= "function" then
+			DumpValue(tostring(k), v, indent + 1, depth - 1)
+		end
+	end
+	W("%s}", pad)
+end
+
+-- The DyePane, found the same way Housing.lua finds it.
+local function FindDyePane()
+	local paths = {
+		"HouseEditorFrame.activeModeFrame.DecorCustomizationsPane.CustomizeComponentContainer.DyePane",
+		"HouseEditorFrame.CustomizeModeFrame.DecorCustomizationsPane.CustomizeComponentContainer.DyePane",
+	}
+	for _, path in ipairs(paths) do
+		local pane = Resolve(path)
+		if pane then return pane, path end
+	end
+	return nil
+end
+
+local function ProbeDeep()
+	W("== deep ==")
+	W("Full contents of the dye tables. Open a decor's dye panel, pick a color in")
+	W("slot 1, THEN run this -- an unpainted slot has nothing in it to read.")
+	W("")
+
+	local pane, path = FindDyePane()
+	if not pane then
+		W("  DyePane not found. Run `/dye probe panel` first.")
+		W("")
+		return
+	end
+	W("  found at %s", path)
+	W("")
+
+	W("-- dye slots --")
+	local slots, seen = {}, {}
+	local byChannel = Get(pane, "dyeSlotFramesByChannel")
+	if type(byChannel) == "table" then
+		pcall(function()
+			for k, slot in pairs(byChannel) do
+				if not seen[slot] then seen[slot] = true; slots[#slots + 1] = { key = k, frame = slot } end
+			end
+		end)
+	end
+	local container = Get(pane, "DyeSlotContainer")
+	if container then
+		for i, child in ipairs({ Try(function() return container:GetChildren() end) }) do
+			if child and not seen[child] then
+				seen[child] = true
+				slots[#slots + 1] = { key = "child[" .. i .. "]", frame = child }
+			end
+		end
+	end
+
+	if #slots == 0 then
+		W("  none found")
+	end
+	for _, entry in ipairs(slots) do
+		W("  slot %s:", tostring(entry.key))
+		DumpValue("dyeSlotInfo", Get(entry.frame, "dyeSlotInfo"), 2, 3)
+		local swatch = Get(entry.frame, "CurrentSwatch") or Get(entry.frame, "Swatch")
+		if swatch then
+			for _, field in ipairs({ "dyeColorInfo", "colorInfo", "dyeSlotInfo", "dyeColorID" }) do
+				local v = Get(swatch, field)
+				if v ~= nil then DumpValue("CurrentSwatch." .. field, v, 2, 3) end
+			end
+			-- Anything else on the swatch that isn't a frame or a function.
+			local extras = {}
+			pcall(function()
+				for k, v in pairs(swatch) do
+					if type(k) == "string" and type(v) ~= "function" and not IsFrame(v) then
+						extras[#extras + 1] = k
+					end
+				end
+			end)
+			table.sort(extras)
+			W("    CurrentSwatch other fields: %s",
+				#extras > 0 and table.concat(extras, ", ") or "(none)")
+		end
+	end
+	W("")
+
+	W("-- GetPreviewDyeInfos() --")
+	if type(Get(pane, "GetPreviewDyeInfos")) == "function" then
+		local infos = Try(function() return pane:GetPreviewDyeInfos() end)
+		if infos == nil then
+			W("  returned nil (nothing previewed yet?)")
+		else
+			DumpValue("infos", infos, 1, 4)
+		end
+	else
+		W("  not present")
+	end
+	W("")
+
+	W("-- dyeCostIcons --")
+	DumpValue("dyeCostIcons", Get(pane, "dyeCostIcons"), 1, 3)
+	W("")
+
+	W("-- DyeSelectionPopout (the swatch grid) --")
+	local popout = Resolve("DyeSelectionPopout")
+	if not popout then
+		W("  not found. It's a global, so it should be there once the grid has opened")
+		W("  at least once this session -- click a dye slot, then run this again.")
+	else
+		W("  shown: %s", tostring(Try(function() return popout:IsShown() end)))
+		local scroll = Get(popout, "DyeSlotScrollBox")
+		if not scroll then
+			W("  DyeSlotScrollBox missing")
+		else
+			-- The data provider holds every shade, not just the visible ones.
+			local provider = Try(function() return scroll:GetDataProvider() end)
+			local size = provider and Try(function() return provider:GetSize() end)
+			W("  data provider size: %s", tostring(size))
+			if provider and type(size) == "number" then
+				for i = 1, math.min(size, 8) do
+					local element = Try(function() return provider:Find(i) end)
+					DumpValue("element[" .. i .. "]", element, 2, 3)
+				end
+				if size > 8 then W("    ...%d more elements", size - 8) end
+			end
+			-- Failing that, the visible buttons carry their own element data.
+			local frames = Try(function() return scroll:GetFrames() end)
+			if type(frames) == "table" and #frames > 0 then
+				W("  visible swatch buttons: %d", #frames)
+				for i = 1, math.min(#frames, 4) do
+					local ed = Try(function() return frames[i]:GetElementData() end)
+					DumpValue("button[" .. i .. "].elementData", ed, 2, 3)
+				end
+			end
 		end
 	end
 	W("")
@@ -667,8 +880,9 @@ function ns.RunProbe(section)
 	if section == "" or section == "items"    then ProbeItems();    ran = true end
 	if section == "" or section == "panel"    then ProbePanel();    ran = true end
 	if section == "" or section == "swatches" then ProbeSwatches(); ran = true end
+	if section == "" or section == "deep"     then ProbeDeep();     ran = true end
 	if not ran then
-		W("unknown section '%s'. Try: addons, items, panel, swatches, or nothing for all.", section)
+		W("unknown section '%s'. Try: addons, items, panel, swatches, deep, or nothing for all.", section)
 	end
 
 	ShowOutput(table.concat(out, "\n"))
