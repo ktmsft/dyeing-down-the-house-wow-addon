@@ -22,8 +22,10 @@ exact moment you know it.
 
 ## 📋 It remembers, so you don't have to
 
-`/dye` opens the window. Nine rows, one per color — because nine dyes is what the
-game has now:
+`/dye` opens the window on two tabs.
+
+**By Color** — nine rows, one per color, because nine dyes is what the game has
+now:
 
 ```
 Color       Have   Flowers   Makeable   Cost      Dye Needed
@@ -35,6 +37,12 @@ Color       Have   Flowers   Makeable   Cost      Dye Needed
 Open a color and you get two things: the flowers it's made from, cheapest first, and
 every shade that color paints — all 77 of them, so you can see at a glance that one
 Blue Housing Dye covers Alliance Blue, Midnight Blue, Tranquility Blue and the rest.
+
+**By Dye** — the 77 color names, one row each, and this is where you say what you
+want. Five Alliance Blue for the wall, three Midnight Blue for the trim. What that
+*costs* is eight Blue Housing Dye, and the By Color tab has already worked it out.
+You type the number in one place and read the total in the other, so the two can
+never drift apart.
 
 "Have" means **everything** — every character's bags, every character's bank, and the
 Warband bank, all totalled. That green you were sure you were out of might be sitting
@@ -65,6 +73,22 @@ The prices are honest, too. It doesn't take the lowest buyout — one person lis
 single unit at a silly price would poison every verdict in the addon. It takes the
 lowest price with real depth behind it, so a lone gouger can't move your numbers.
 
+## 🪄 And it follows you to the dye station
+
+Standing at a station, the addon is already there:
+
+🟡 A marker on any color you're short of, so the ones worth making stand out in
+the game's own list.
+
+📋 A **"You have 6 / need 10"** line under the recipe title, green once you get there.
+
+🌿 **Which flower to use** — "Use Silverleaf — 24 held, makes 2". Ten of one flower
+makes a dye and a color has up to fifteen that will do it, so this is the only part
+of the decision the window leaves to you. It answers from what's in your bags, so it
+works before you've ever scanned a price; once you have, it names the cheapest.
+
+All of it can be switched off if you'd rather it stayed out of the way.
+
 ## 🧮 Let the addon do the math
 
 Ten of the *same* flower make a dye. So forty flowers spread across four different
@@ -88,7 +112,8 @@ how far off your goal you are.
 ## ⚙️ Configurable
 
 Everything lives in one options panel. Pick your columns, show only the cheapest
-flowers, lock the window, toggle the rainbow title.
+flowers, lock the window, toggle the rainbow title, and set how see-through the
+window is if you'd rather look at the house through it.
 
 Two collapsible checklists trim the list to what you care about: the nine colors
 with swatches and a count of the shades each one paints, and every flower by name.
@@ -104,6 +129,7 @@ and collapses to a slim title bar if you'd rather tuck it away than close it.
 - `/dye source <auto|tsm|auctionator|blizzard>` — where prices come from
 - `/dye search <text>` — filter by color, or by a shade name like "obsidium"
 - `/dye sort <alpha | price | owned>` — change the order (price = cost to make)
+- `/dye tab <color | dye>` — switch tabs
 - `/dye expand` · `/dye collapse` — open or close every color
 - `/dye hidezero` — hide colors you have no dye of
 - `/dye lock` · `/dye unlock` — freeze or free the window
