@@ -1302,6 +1302,76 @@ ns.SetPrice("rose", nil)
 -- check rather than one "it migrated" assertion.
 --------------------------------------------------------------------------------
 
+--------------------------------------------------------------------------------
+-- Goals live on shades; families are the roll-up
+--
+-- The model people actually decorate with: you want five Alliance Blue for a wall,
+-- and what that COSTS is five Blue Housing Dye. The number is typed once against
+-- the shade and derived everywhere else, so the two can never disagree.
+--------------------------------------------------------------------------------
+
+print("\n-- Setting goals on shades --")
+DyeingDownTheHouseDB.goals = {}
+DyeingDownTheHouseDB.unassigned = {}
+
+ns.SetShadeGoal("Crimson", 5)
+check("a shade goal reads back", ns.GetShadeGoal("Crimson"), 5)
+check("shade goals are case-insensitive", ns.GetShadeGoal("crimson"), 5)
+check("...on the way in as well", (function()
+	ns.SetShadeGoal("SCARLET", 3); return ns.GetShadeGoal("Scarlet")
+end)(), 3)
+check("a shade with no goal is 0, not nil", ns.GetShadeGoal("Azure"), 0)
+check("an unknown shade name is harmless", ns.GetShadeGoal("Chartreuse"), 0)
+
+print("\n-- The family is the sum of its shades --")
+-- Crimson 5 + Scarlet 3, both red.
+check("red needs what its shades add up to", ns.GetGoal("red"), 8)
+check("blue has no shade goals yet", ns.GetGoal("blue"), 0)
+ns.SetShadeGoal("Azure", 4)
+check("blue follows its own shade", ns.GetGoal("blue"), 4)
+check("...and red is unaffected", ns.GetGoal("red"), 8)
+
+print("\n-- Clearing a shade goal --")
+ns.SetShadeGoal("Scarlet", 0)
+check("the shade is cleared", ns.GetShadeGoal("Scarlet"), 0)
+check("and the family total drops with it", ns.GetGoal("red"), 5)
+ns.SetShadeGoal("Scarlet", "junk")
+check("junk clears rather than erroring", ns.GetShadeGoal("Scarlet"), 0)
+
+print("\n-- The unattributed remainder --")
+-- Carried over from before shades could hold a goal. It still counts, and it can
+-- still be cleared, which is what stops a migrated number being stuck forever.
+ns.SetUnassignedGoal("red", 10)
+check("unassigned reads back", ns.GetUnassignedGoal("red"), 10)
+check("and adds to the shades", ns.GetGoal("red"), 15)
+check("SetGoal writes the unattributed bucket", (function()
+	ns.SetGoal("red", 2); return ns.GetUnassignedGoal("red")
+end)(), 2)
+check("...so the family total follows", ns.GetGoal("red"), 7)
+ns.SetUnassignedGoal("red", 0)
+check("it can be cleared away entirely", ns.GetGoal("red"), 5)
+
+print("\n-- The breakdown behind a family total --")
+ns.SetShadeGoal("Scarlet", 9)
+local bd = ns.GetGoalBreakdown("red")
+check("only shades carrying a goal appear", #bd, 2)
+check("biggest first", bd[1].name, "Scarlet")
+check("...then the rest", bd[2].name, "Crimson")
+check("a family with no shade goals is empty", #ns.GetGoalBreakdown("white"), 0)
+
+print("\n-- The rest of the addon reads the roll-up --")
+-- GetRecipeStatus, the station line and the Short column all go through GetGoal,
+-- so a shade goal has to move them without any of them knowing shades exist.
+DyeingDownTheHouseDB.goals = {}
+DyeingDownTheHouseDB.unassigned = {}
+ns.SetShadeGoal("Azure", 6)
+local rs = ns.GetRecipeStatus("blue")
+check("recipe status sees the rolled-up goal", rs.goal, 6)
+check("...and its shortfall", rs.shortfall, 6)
+check("sorting by goal sees it too", keys(ns.SortDyes(ns.DYES, "goal")), "blue,green,red,white")
+DyeingDownTheHouseDB.goals = {}
+DyeingDownTheHouseDB.unassigned = {}
+
 print("\n-- v2 -> v3 migration --")
 
 -- A profile as it stood before the patch: real pre-12.1 keys, of colors the fixture
@@ -1332,14 +1402,19 @@ DyeingDownTheHouseDB = {
 Fire("ADDON_LOADED", "DyeingDownTheHouse")
 
 local db = DyeingDownTheHouseDB
-check("schema version bumped", db.version, 3)
+check("schema version bumped", db.version, 4)
 
 -- GOALS fold by addition: 5 Horde Red + 3 Mahogany is 8 Red Housing Dye, which is
--- exactly what Hestia's mail does to the items.
-check("red goals added together", db.goals.red, 8)
-check("blue goal carried over", db.goals.blue, 4)
-check("an ex-teal goal follows its new family", db.goals.green, 2)
+-- exactly what Hestia's mail does to the items themselves. v4 then moves the
+-- family total to `unassigned`, since goals now live on shade names and the addon
+-- cannot know which shades a family goal was meant to cover.
+check("red goals added together", db.unassigned.red, 8)
+check("blue goal carried over", db.unassigned.blue, 4)
+check("an ex-teal goal follows its new family", db.unassigned.green, 2)
 check("no old dye key survives in goals", db.goals.hordered, nil)
+check("nor as a colour key", db.goals.red, nil)
+-- What matters to everything downstream is that the TOTAL is unchanged.
+check("the family still needs what it needed", ns.GetGoal("red"), 8)
 
 -- COUNTS are dropped, never folded: the old items no longer exist and the new ones
 -- arrive by mail the player still has to collect, so folding would claim dyes that
@@ -1377,15 +1452,18 @@ check("the pigment column is dropped", db.ui.cols.pigment, nil)
 check("other column choices are kept", db.ui.cols.flowers, true)
 
 print("\n-- Migrating twice changes nothing --")
-local goalsRed = db.goals.red
+local goalsRed = db.unassigned.red
 Fire("ADDON_LOADED", "DyeingDownTheHouse")
-check("goals are not doubled on a second run", DyeingDownTheHouseDB.goals.red, goalsRed)
-check("still at the current version", DyeingDownTheHouseDB.version, 3)
+check("goals are not doubled on a second run", DyeingDownTheHouseDB.unassigned.red, goalsRed)
+check("still at the current version", DyeingDownTheHouseDB.version, 4)
 
-print("\n-- A profile created after 12.1 is left alone --")
-DyeingDownTheHouseDB = { version = 3, goals = { red = 12 }, ui = {} }
+print("\n-- A profile already on the current schema is left alone --")
+DyeingDownTheHouseDB = {
+	version = 4, goals = { ["alliance blue"] = 12 }, unassigned = { red = 3 }, ui = {},
+}
 Fire("ADDON_LOADED", "DyeingDownTheHouse")
-check("its goals survive untouched", DyeingDownTheHouseDB.goals.red, 12)
+check("its shade goals survive untouched", DyeingDownTheHouseDB.goals["alliance blue"], 12)
+check("its unassigned goals survive too", DyeingDownTheHouseDB.unassigned.red, 3)
 
 --------------------------------------------------------------------------------
 -- Discovery: reading the dyes out of C_DyeColor

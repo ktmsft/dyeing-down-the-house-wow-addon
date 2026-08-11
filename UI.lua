@@ -5,24 +5,24 @@ local ADDON, ns = ...
 --------------------------------------------------------------------------------
 -- UI.lua — the on-screen window.
 --
--- A movable, resizable window showing one row per color:
+-- A movable, resizable window with two tabs, because there are two questions:
 --
---   Color | Have | Flowers | Makeable | Cost | Dye Needed
+--   By Color   Color | Have | Flowers | Makeable | Cost | Dye Needed
+--              The nine dyes you actually stock. Dye Needed here is DERIVED — the
+--              sum of every shade goal in the family — so it is drawn, not typed.
+--              Open a row for the flowers it's made from and the shades it paints.
 --
--- Open a row and it shows the flowers that color is made from, cheapest first, and
--- the shades that color can paint.
+--   By Dye     Dye | Color | Dye Needed
+--              The 77 shade names, which is where a goal is actually set. You want
+--              five Alliance Blue for a wall; what that COSTS is five Blue Housing
+--              Dye, and the other tab adds it up.
 --
--- This had TWO tabs until 12.1, and losing them is the single biggest change in
--- here. They existed because a dye and a color family were different things: 62 dye
--- items each with their own count and goal, sitting on top of a pigment pile and a
--- flower pool that belonged to the family. Printing the family's figures on all six
--- black rows implied six stockpiles where there was one, so the family view stated
--- them once and the dye view answered "how am I doing on THIS dye".
---
--- 12.1 collapsed the 62 into nine, one per color. The dye IS the family now, both
--- tabs were showing the same nine rows, and keeping them would have been two names
--- for one list. The shades live on as names you can paint — so they're what you get
--- when you open a row, which is exactly where the flowers already were.
+-- These tabs briefly did not exist. 12.1 collapsed 62 dye items into nine, which
+-- made "how am I doing on this dye" and "what can I make" the same question, so
+-- both views were showing the same nine rows and one of them went. Moving goals
+-- onto shade names split the question again — one tab is where numbers are typed,
+-- the other is what they cost — and that is a real difference rather than two
+-- names for one list.
 --
 -- Optional columns can be hidden from the options panel; hidden columns reflow away.
 -- Clickable headers sort. All data comes from Core.
@@ -40,10 +40,11 @@ local HEIGHT_MIN, HEIGHT_MAX = 200, 900
 -- Dye-name column can't balloon. Both bounds ride the fit width, so they shift as
 -- columns are shown/hidden and the window can never scale out of control.
 local WIDTH_SHRINK, WIDTH_GROW = 60, 240
--- Where the column headers sit, and where the list starts under them. Both came
--- up by the height of the tab strip when the second view was removed.
-local HEADER_Y = 70
-local TOP_INSET = 94
+-- Where the tab strip sits, where the column headers sit under it, and where the
+-- list starts under those.
+local TAB_Y = 64
+local HEADER_Y = 96
+local TOP_INSET = 120
 local BOT_INSET = 14
 local COLLAPSED_H = 34   -- height of the title-bar strip when collapsed
 local ROW_RIGHT = -30          -- a row's right edge, in frame-right coordinates
@@ -55,7 +56,8 @@ local GAP, MARGIN = 8, 6
 -- `Pigment` is gone with the pigments. The Makeable column absorbed what it was
 -- really for — "can I close this gap without going shopping" — and now answers it
 -- in one number instead of two.
-local COLDEF = {
+local COLDEF
+COLDEF = {
 	owned   = { header = "Have",    sort = "owned",     w = 44,
 		hint = "Housing dyes of this color across every character, bank and the Warband bank." },
 	flowers = { header = "Flowers", sort = "craftherb", w = 66, optional = true,
@@ -70,15 +72,29 @@ local COLDEF = {
 		hint = "What one costs to make: ten of this color's cheapest flower.\n(Dyes are Warband-bound, so there's no price to buy one at.)" },
 	-- Wide enough for a four-figure shortfall: a goal of 500 on a color you own 10 of
 	-- is an ordinary thing to set, and 48px clipped it.
+	-- Read-only: it is the sum of the shade goals set on the By Dye tab, plus any
+	-- unattributed remainder. One editable place and one derived total is the whole
+	-- point — an editable family total would be a second source for the same number.
 	goal    = { header = "Dye Needed", sort = "goal",   w = 68, optional = true,
-		hint = "How many of this color you want. The window counts down to it, and the\nhouse dye panel can set it while you're looking at the decor." },
+		hint = "How many of this color you want, added up from the shades on the By Dye\ntab. Set the numbers there; this is the total they come to." },
 }
 
--- Right to left.
-local ORDER = { "goal", "value", "makeable", "flowers", "owned" }
+-- The By Dye tab's columns. A shade has no count, no price and nothing to make —
+-- it is a name and a number you want — so the only column it needs is the goal,
+-- plus its family so you can see what the number will cost.
+COLDEF.family = { header = "Color", sort = "family", w = 74,
+	hint = "Which of the nine dyes this color costs. Set a number here and it adds\ninto that family's total on the other tab." }
+COLDEF.shadeGoal = { header = "Dye Needed", sort = "goal", w = 68,
+	hint = "How many of this exact color you want. The family's total is the sum of\nevery shade you've asked for." }
+
+-- Right to left, per tab.
+local ORDER_BY_TAB = {
+	color = { "goal", "value", "makeable", "flowers", "owned" },
+	dye   = { "shadeGoal", "family" },
+}
 
 local function ActiveOrder()
-	return ORDER
+	return ORDER_BY_TAB[ns.GetTab and ns.GetTab() or "color"] or ORDER_BY_TAB.color
 end
 
 -- Teal is gone from the game, and gone from here. A saved preference naming it
@@ -98,6 +114,7 @@ ns.ACCENT = ACCENT
 
 local frame, scroll, scrollBar, rows, searchBox, titleFS
 local headers = {}
+local tabButtons -- { color = btn, dye = btn }, each with :SetActive(bool)
 local layout = {}
 local sepCount = 0   -- how many column dividers are currently visible (per color row)
 local visible = 12
@@ -328,12 +345,33 @@ local function CreateRow(index)
 
 	row.cells = {}
 	for key in pairs(COLDEF) do
-		if key ~= "goal" then
+		if key ~= "goal" and key ~= "shadeGoal" then
 			local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 			fs:SetJustifyH("CENTER")
 			row.cells[key] = fs
 		end
 	end
+
+	-- The shade tab's own entry box. Kept separate from the family tab's `goalBox`
+	-- rather than reused: one is editable and one is a derived total, and sharing a
+	-- widget between "you type here" and "this is computed" is how a read-only value
+	-- ends up looking editable.
+	local shadeGoal = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+	shadeGoal:SetHeight(ROW_H - 6)
+	shadeGoal:SetAutoFocus(false)
+	shadeGoal:SetNumeric(true)
+	shadeGoal:SetJustifyH("CENTER")
+	local function CommitShade(self)
+		if row.shadeKind == "unassigned" and row.color then
+			ns.SetUnassignedGoal(row.color, self:GetNumber())
+		elseif row.shadeName then
+			ns.SetShadeGoal(row.shadeName, self:GetNumber())
+		end
+	end
+	shadeGoal:SetScript("OnEnterPressed", function(self) CommitShade(self); self:ClearFocus() end)
+	shadeGoal:SetScript("OnEditFocusLost", CommitShade)
+	shadeGoal:SetScript("OnEscapePressed", function(self) self:ClearFocus(); ns.Refresh() end)
+	row.shadeGoalBox = shadeGoal
 
 	local goal = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
 	goal:SetHeight(ROW_H - 6)
@@ -452,9 +490,10 @@ local function SetColorMode(row, open)
 	row.name:SetPoint("LEFT", row.swatch, "RIGHT", 8, 0)
 	row.name:SetPoint("RIGHT", row, "RIGHT", layout.name_r or -180, 0)
 	for key, fs in pairs(row.cells) do fs:SetShown(layout[key] ~= nil) end
-	-- The goal box lives on the color row now. It used to be a per-dye field, and
-	-- there is no per-dye any more: you stock a color.
-	row.goalBox:SetShown(layout.goal ~= nil)
+	-- The family's total is DERIVED, so it is drawn as a number rather than typed
+	-- into. The editable one is on the By Dye tab.
+	row.goalBox:Hide()
+	row.shadeGoalBox:Hide()
 	for i, s in ipairs(row.seps) do s:SetShown(i <= sepCount) end
 	row.fIcon:Hide(); row.fName:Hide(); row.fDetail:Hide()
 end
@@ -473,7 +512,7 @@ end
 local function SetSubMode(row, color, last)
 	row.expander:Hide(); row.swatch:Hide(); row.name:Hide()
 	for _, fs in pairs(row.cells) do fs:Hide() end
-	row.goalBox:Hide(); row.goalCheck:Hide()
+	row.goalBox:Hide(); row.goalCheck:Hide(); row.shadeGoalBox:Hide()
 	-- No column dividers: this block has no columns, and drawing them here is exactly
 	-- what made the layout look broken.
 	for _, s in ipairs(row.seps) do s:Hide() end
@@ -520,10 +559,15 @@ function ns.ApplyColumnLayout()
 	for _, row in ipairs(rows) do
 		for key, def in pairs(COLDEF) do
 			local L = layout[key]
-			local widget = (key == "goal") and row.goalBox or row.cells[key]
+			local widget = (key == "goal" and row.goalBox)
+				or (key == "shadeGoal" and row.shadeGoalBox)
+				or row.cells[key]
 			widget:ClearAllPoints()
 			if L then
-				if key == "goal" then
+				if key == "shadeGoal" then
+					widget:SetSize(L.w - 8, ROW_H - 6)
+					widget:SetPoint("RIGHT", row, "RIGHT", L.r - 4, 0)
+				elseif key == "goal" then
 					-- A narrow entry field with the achieved-check tucked to its right:
 					-- the check sits at the column's right edge, the box just left of it.
 					local CHECK_SLOT = 16
@@ -628,7 +672,16 @@ function ns.Refresh()
 	-- which would spill the rows out below the short bar on any bag/loot refresh).
 	if DyeingDownTheHouseDB.ui.collapsed then return end
 
-	local sort, dir = ns.GetSort()
+	local onDyeTab = (ns.GetTab() == "dye")
+	local sort, dir
+	if onDyeTab then sort, dir = ns.GetShadeSort() else sort, dir = ns.GetSort() end
+
+	if tabButtons then
+		for key, btn in pairs(tabButtons) do btn:SetActive(key == ns.GetTab()) end
+	end
+	if headers.name then
+		headers.name.label = onDyeTab and "Dye" or "Color"
+	end
 
 	-- Sort caret is a real sprite (a scrollbar arrow atlas), tinted to the accent and
 	-- flipped 180° for descending. A rotatable Texture means one "up" atlas covers
@@ -671,6 +724,12 @@ function ns.Refresh()
 		end
 	end
 
+	if ns.GetTab() == "dye" then
+		-- The flat shade list. No expanding: a shade has nothing underneath it.
+		for _, row in ipairs(ns.GetDisplayShades()) do
+			entries[#entries + 1] = { kind = "shaderow2", row = row }
+		end
+	else
 	for _, dye in ipairs(ns.GetDisplayDyes()) do
 		local color = dye.color
 		local open = ns.IsColorExpanded(color)
@@ -718,6 +777,7 @@ function ns.Refresh()
 
 			CloseBlock(from)
 		end
+	end
 	end
 
 	-- Note: `X and X()` would truncate GetScanProgress's 3 returns to 1, leaving
@@ -777,9 +837,11 @@ function ns.Refresh()
 					if text ~= nil then fs:SetText(text); fs:SetTextColor(r, g, b) end
 				end
 			end
-			if layout.goal and not row.goalBox:HasFocus() then
+			-- Derived, so it is drawn into the cell rather than typed into a box.
+			if layout.goal and row.cells.goal then
 				local gval = ns.GetGoal(dye.key)
-				row.goalBox:SetText(gval > 0 and gval or "")
+				row.cells.goal:SetText(gval > 0 and tostring(gval) or "")
+				row.cells.goal:SetTextColor(0.95, 0.82, 0.35)
 			end
 			-- Goal met means you HOLD them. Flowers that could still become dyes
 			-- deliberately don't count: when stock-in-hand did count, a color could show
@@ -788,6 +850,48 @@ function ns.Refresh()
 			local covered = layout.goal and rc and rc.goal > 0 and rc.owned >= rc.goal
 			row.goalCheck:SetShown(covered and true or false)
 			if GameTooltip:IsOwned(row) then ShowColorTooltip(row) end
+			row:Show()
+
+		elseif e and e.kind == "shaderow2" then
+			-- One shade: swatch, name, its family, and the box the number goes in.
+			local r = e.row
+			row.entryKind, row.color = "shaderow2", nil
+			row.shadeName = (r.kind == "shade") and r.name or nil
+			row.shadeKind = r.kind
+			row.color = r.color
+			SetColorMode(row, false)
+			row.expander:Hide()
+			local sw = SWATCH[r.color] or { 0.6, 0.6, 0.6 }
+			row.swatch:SetColorTexture(sw[1], sw[2], sw[3])
+			-- `guess` means the addon inferred this family rather than reading it from
+			-- the game. Discover.lua clears these, so it should be rare — but an
+			-- unverified placement must never look identical to a confirmed one.
+			row.name:SetText(r.name .. (r.guess and "  |cff8a8a94?|r" or ""))
+			if r.kind == "unassigned" then
+				-- A migrated family goal, not attached to any shade. Shown so it can be
+				-- seen and cleared rather than lurking inside a total.
+				row.name:SetTextColor(0.72, 0.72, 0.76)
+			else
+				row.name:SetTextColor(0.92, 0.92, 0.92)
+			end
+
+			for key, fs in pairs(row.cells) do
+				if layout[key] and key == "family" then
+					fs:SetText(r.color:gsub("^%l", string.upper))
+					fs:SetTextColor(sw[1] * 0.6 + 0.4, sw[2] * 0.6 + 0.4, sw[3] * 0.6 + 0.4)
+				end
+			end
+
+			row.goalBox:Hide()
+			row.goalCheck:Hide()
+			if layout.shadeGoal then
+				row.shadeGoalBox:Show()
+				if not row.shadeGoalBox:HasFocus() then
+					row.shadeGoalBox:SetText(r.goal > 0 and tostring(r.goal) or "")
+				end
+			else
+				row.shadeGoalBox:Hide()
+			end
 			row:Show()
 
 		elseif e and e.kind == "flower" then
@@ -895,7 +999,10 @@ local function MakeHeader(key, label, sortMode)
 	btn.arrow = a
 	btn.hint = COLDEF[key] and COLDEF[key].hint
 	btn:SetScript("OnClick", function()
-		if sortMode then ns.CycleSort(sortMode) end
+		if not sortMode then return end
+		-- Each tab sorts a different list, so the same header means different things
+		-- on each: "Dye Needed" orders nine families on one and 77 shades on the other.
+		if ns.GetTab() == "dye" then ns.CycleShadeSort(sortMode) else ns.CycleSort(sortMode) end
 		ResetScroll(); ns.Refresh()
 	end)
 	btn:SetScript("OnEnter", function()
@@ -1063,8 +1170,57 @@ function ns.BuildUI()
 		ns.Refresh()
 	end)
 
-	-- Headers. The tab strip that used to sit above these is gone with the second
-	-- view; the list starts straight under the search box now.
+	-- Tabs. Hand-built rather than PanelTabButtonTemplate: the stock tab art is sized
+	-- and tinted for Blizzard's parchment frames and reads badly on this dark one, and
+	-- a template rename in a future patch would take the whole window with it.
+	do
+		local function MakeTab(key, label, anchor)
+			local btn = CreateFrame("Button", nil, frame)
+			btn:SetSize(112, 20)
+			if anchor then
+				btn:SetPoint("LEFT", anchor, "RIGHT", 4, 0)
+			else
+				btn:SetPoint("TOPLEFT", 14, -TAB_Y)
+			end
+			btn.bg = btn:CreateTexture(nil, "BACKGROUND")
+			btn.bg:SetAllPoints()
+			btn.fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+			btn.fs:SetAllPoints()
+			btn.fs:SetJustifyH("CENTER")
+			btn.fs:SetText(label)
+			function btn:SetActive(active)
+				self.active = active
+				if active then
+					self.bg:SetColorTexture(ACCENT[1] * 0.35, ACCENT[2] * 0.30, ACCENT[3] * 0.45, 0.9)
+					self.fs:SetTextColor(1, 1, 1)
+				else
+					self.bg:SetColorTexture(1, 1, 1, 0.04)
+					self.fs:SetTextColor(0.62, 0.62, 0.66)
+				end
+			end
+			btn:SetScript("OnClick", function()
+				ns.SetTab(key)
+				-- Different columns and a different row count, so neither the old layout
+				-- nor the old scroll offset means anything on the new tab.
+				ns.ApplyColumnLayout()
+				ResetScroll()
+				ns.Refresh()
+			end)
+			btn:SetScript("OnEnter", function(self)
+				if not self.active then self.fs:SetTextColor(0.9, 0.9, 0.9) end
+			end)
+			btn:SetScript("OnLeave", function(self) self:SetActive(self.active) end)
+			btn:SetActive(false)
+			return btn
+		end
+
+		tabButtons = {}
+		tabButtons.color = MakeTab("color", "By Color", nil)
+		tabButtons.dye = MakeTab("dye", "By Dye", tabButtons.color)
+	end
+
+	-- The leftmost header changes label with the tab (Color / Dye) and sorts
+	-- whichever list is showing.
 	local dyeHead = MakeHeader("name", "Color", "alpha")
 	dyeHead:ClearAllPoints()
 	dyeHead:SetPoint("TOPLEFT", 30, -HEADER_Y)
@@ -1104,7 +1260,8 @@ function ns.BuildUI()
 	end)
 
 	-- Everything hidden when collapsed to the title bar (headers handled separately).
-	frame.contentWidgets = { searchBox, sLabel, clear, opts, scanBtn, scroll, grip }
+	frame.contentWidgets = { searchBox, sLabel, clear, opts, scanBtn, scroll, grip,
+		tabButtons.color, tabButtons.dye }
 
 	ns.RestorePosition()
 	ns.ApplyColumnLayout()

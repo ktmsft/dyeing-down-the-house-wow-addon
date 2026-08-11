@@ -17,9 +17,9 @@ addon is rebuilt to match, which is why this is a 2.0.
   what the window counts and what goals are set against.
 - **Teal is gone.** Blizzard retired the category. Its shades moved to blue or
   green, and a teal goal moves with them.
-- **The two tabs are one list.** They existed because a dye and a color family were
-  different things. They aren't any more, and both tabs were showing the same nine
-  rows.
+- **Two tabs again, for two different questions.** By Color is the nine dyes you
+  stock — what you have, what your flowers would make, what you still need. By Dye
+  is the 77 color names, which is where the numbers get typed.
 - **Open a color to see the shades it paints.** All 77 of them, the 15 new ones
   included, in a block of their own under the flowers: a rule, a "Paints 7 colors"
   heading, then the names two across. They're a reference — nothing to hold, count
@@ -29,9 +29,15 @@ addon is rebuilt to match, which is why this is a 2.0.
   front. Turn the list off in the options if you'd rather just see flowers.
 - **The Pigment column is gone**, along with the pigments. Makeable covers what it
   was for: how many you could make right now from the flowers on hand.
-- **Your goals are carried over, added up.** Five Alliance Blue and three Midnight
-  Blue becomes eight Blue — the same thing Hestia's mail does to the dyes
-  themselves.
+- **Goals are set per color name, and the family adds them up.** You want five
+  Alliance Blue for a wall and three Midnight Blue for the trim; the Blue row says
+  you need eight Blue Housing Dye. Set the numbers on the **By Dye** tab, read the
+  totals on **By Color**. One place to type, one place to look, and they can't
+  disagree.
+- **Goals you already had are kept.** They were per-color before there was
+  anywhere else to put them, so each one carries over as an unassigned entry on
+  its family — it still counts toward the total, and you can edit or clear it from
+  the By Dye tab.
 - Dye counts from before the patch are cleared rather than carried across. Those
   items don't exist any more and the replacements arrive by mail you have to
   collect, so counting them would claim dyes you don't have yet. Bags recount on

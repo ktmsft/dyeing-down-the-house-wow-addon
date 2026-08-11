@@ -81,9 +81,17 @@ function ns.RebuildLookups()
 	end
 
 	-- Shades are NOT items and deliberately never reach `add`: nothing counts them,
-	-- prices them or scans for them. They're grouped by family for the expand view
-	-- and for the search, and that's all they do.
+	-- prices them or scans for them. They're grouped by family, they carry goals,
+	-- and they answer the search.
+	--
+	-- A shade's key is its lowercased NAME. It has nothing else stable — no item ID,
+	-- and the game's dyeColorID isn't known until Discover.lua has run, which is
+	-- after saved variables are read. The name is what the player typed a goal
+	-- against, so the name is what the goal is filed under.
+	ns.shadeByKey = {}
 	for _, shade in ipairs(ns.SHADES or {}) do
+		shade.key = shade.name:lower()
+		ns.shadeByKey[shade.key] = shade
 		if shade.color then
 			local list = ns.shadesByColor[shade.color]
 			if not list then list = {}; ns.shadesByColor[shade.color] = list end
@@ -118,7 +126,9 @@ ns.OpenOptions     = ns.OpenOptions     or function() end
 -- 2: dyes went Warband-bound, so every stored dye price is now junk (see Migrate).
 -- 3: 12.1 replaced 62 dye items and 10 pigments with nine, so every key that named
 --    one of them has to be rewritten to its color (see Migrate).
-local DB_VERSION = 3
+-- 4: goals moved from the nine families onto the 77 shade names, so the old
+--    family goals become "unassigned" entries rather than being lost.
+local DB_VERSION = 4
 
 local defaults = {
 	version = DB_VERSION,
@@ -130,7 +140,16 @@ local defaults = {
 	warbandSeen = nil,  -- timestamp of that visit
 	warbandSeenBy = nil,-- which character made it
 	chars = {},         -- [charKey] = { bags, bank, bagsSeen, bankSeen, name, realm, class }
-	goals = {},         -- [dyeKey] = number, account-wide (they measure account totals)
+	-- [shadeKey] = number. Goals are set against SHADE names — "5 Alliance Blue" —
+	-- because that's how people decorate: you want a specific colour on a specific
+	-- wall. What that COSTS is a family dye, so a family's requirement is the sum of
+	-- its shades' goals. One editable place, one derived total, and they can't drift.
+	goals = {},
+	-- [color] = number, a family goal not attached to any shade. Only the v4
+	-- migration creates these, from the per-family goals that were the whole model
+	-- before shades could carry one. Editable and self-clearing: set it to 0 and the
+	-- row disappears.
+	unassigned = {},
 	learned = {},       -- [key] = itemID discovered by name match
 	prices = {},        -- [key] = { copper = n, seen = ts, source = "ah" }
 	-- Where prices come from. "auto" takes the best source installed; naming one
@@ -155,11 +174,11 @@ local defaults = {
 		search = "",       -- name filter
 		sort = "alpha",    -- see VALID_SORT
 		sortDir = "asc",   -- "asc" | "desc"
-		-- The two tabs are gone. They existed because pigments and flowers belonged to
-		-- a COLOR while dyes were 62 separate items, so "what can I make" and "how am I
-		-- doing on this dye" wanted different columns. 12.1 made a dye a color, which
-		-- makes those the same question — one list of nine, and the shades a family
-		-- covers are what you get when you open a row.
+		-- Two tabs, for two questions that genuinely differ again now that goals live
+		-- on shades: "which colour am I short of" (the nine families, rolled up) and
+		-- "how many of this exact shade did I want" (the 77 names, where the numbers
+		-- are actually typed).
+		tab = "color",   -- "color" | "dye"
 		-- Optional columns. Color + Have are always shown.
 		cols = { flowers = true, makeable = true, value = true, goal = true },
 		expanded = {},   -- [color] = true, color rows opened to show flowers and shades
@@ -358,6 +377,32 @@ local function Migrate(db)
 		for key in pairs(db.learned or {}) do
 			if LEGACY_KEY_COLOR[key] then db.learned[key] = nil end
 		end
+	end
+
+	-- v3 -> v4: goals used to live on the nine families and now live on the 77 shade
+	-- names, with the family total derived from them. A family goal cannot be split
+	-- across shades — the addon has no idea which shades the player meant — so each
+	-- one moves to `unassigned`, where it still counts toward the family's total and
+	-- can be edited or cleared. Silently dropping hand-entered numbers is the one
+	-- outcome worth real effort to avoid; carrying them as "some blue, unattributed"
+	-- is honest about what is actually known.
+	if from < 4 then
+		local moved = {}
+		for key, value in pairs(db.goals or {}) do
+			local entry = ns.byKey[key]
+			if entry and entry.kind == "dye" then
+				moved[entry.color] = (moved[entry.color] or 0) + (tonumber(value) or 0)
+			end
+		end
+		db.unassigned = db.unassigned or {}
+		for color, value in pairs(moved) do
+			if value > 0 then
+				db.unassigned[color] = (db.unassigned[color] or 0) + value
+			end
+		end
+		-- Goals is a shade-keyed table from here on. Anything left in it was keyed by
+		-- a colour, which is now a different namespace entirely.
+		db.goals = {}
 	end
 
 	-- Keys that never shipped, cleared on every load rather than at a version gate.
@@ -775,11 +820,33 @@ function ns.FormatAge(timestamp)
 	end
 end
 
-function ns.GetGoal(key)
-	return DyeingDownTheHouseDB.goals[key] or 0
+--------------------------------------------------------------------------------
+-- Goals
+--
+-- Set against SHADES, read against FAMILIES. You decide you want five Alliance
+-- Blue; what that costs is five Blue Housing Dye, and the Blue row adds that to
+-- everything else blue you've asked for. The number is typed in one place and
+-- derived everywhere else, so the two can never disagree.
+--
+-- `unassigned` is the one exception, and it exists only for history: goals used to
+-- be per-family, and a family goal can't be split across shades because the addon
+-- doesn't know which shades were meant. Those carry forward as an unattributed
+-- amount that still counts and can still be cleared.
+--------------------------------------------------------------------------------
+
+local function ShadeKey(name)
+	if type(name) ~= "string" then return nil end
+	return name:lower()
 end
 
-function ns.SetGoal(key, value)
+function ns.GetShadeGoal(name)
+	local key = ShadeKey(name)
+	return key and DyeingDownTheHouseDB.goals[key] or 0
+end
+
+function ns.SetShadeGoal(name, value)
+	local key = ShadeKey(name)
+	if not key then return end
 	value = tonumber(value)
 	if not value or value <= 0 then
 		DyeingDownTheHouseDB.goals[key] = nil
@@ -787,6 +854,53 @@ function ns.SetGoal(key, value)
 		DyeingDownTheHouseDB.goals[key] = math.floor(value)
 	end
 	ns.Refresh()
+end
+
+-- The part of a family's goal not attached to any shade.
+function ns.GetUnassignedGoal(color)
+	return DyeingDownTheHouseDB.unassigned[color] or 0
+end
+
+function ns.SetUnassignedGoal(color, value)
+	value = tonumber(value)
+	if not value or value <= 0 then
+		DyeingDownTheHouseDB.unassigned[color] = nil
+	else
+		DyeingDownTheHouseDB.unassigned[color] = math.floor(value)
+	end
+	ns.Refresh()
+end
+
+-- How many dyes of `color` are wanted in total: every shade goal in the family,
+-- plus anything unattributed. This is what the window, the station and the recipe
+-- maths all read, so there is exactly one definition of "needed".
+function ns.GetGoal(color)
+	local total = DyeingDownTheHouseDB.unassigned[color] or 0
+	for _, shade in ipairs(ns.shadesByColor[color] or {}) do
+		total = total + (DyeingDownTheHouseDB.goals[shade.key] or 0)
+	end
+	return total
+end
+
+-- Kept so a family goal can still be set directly — the housing panel used to, and
+-- the slash commands and tests do. It writes the unattributed bucket, which is the
+-- only family-level number there is now.
+function ns.SetGoal(color, value)
+	ns.SetUnassignedGoal(color, value)
+end
+
+-- The shades of a family that carry a goal, biggest first, for the family tooltip.
+function ns.GetGoalBreakdown(color)
+	local out = {}
+	for _, shade in ipairs(ns.shadesByColor[color] or {}) do
+		local goal = DyeingDownTheHouseDB.goals[shade.key] or 0
+		if goal > 0 then out[#out + 1] = { name = shade.name, goal = goal } end
+	end
+	table.sort(out, function(a, b)
+		if a.goal ~= b.goal then return a.goal > b.goal end
+		return a.name < b.name
+	end)
+	return out
 end
 
 -- True once any character on the account has visited a bank, so the UI can say
@@ -1576,6 +1690,115 @@ function ns.GetDisplayDyes()
 end
 
 --------------------------------------------------------------------------------
+-- The By Dye tab
+--
+-- One row per SHADE — the 77 names you can actually paint with — because that's
+-- where a goal gets typed. The family tab answers what those goals cost; this one
+-- is where they're set.
+--------------------------------------------------------------------------------
+
+local VALID_SHADE_SORT = { alpha = true, family = true, goal = true }
+local SHADE_DEFAULT_DIR = { alpha = "asc", family = "asc", goal = "desc" }
+
+function ns.GetShadeSort()
+	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
+	local mode = VALID_SHADE_SORT[ui.shadeSort] and ui.shadeSort or "alpha"
+	return mode, ui.shadeSortDir or SHADE_DEFAULT_DIR[mode]
+end
+
+function ns.SetShadeSort(mode, dir)
+	if not VALID_SHADE_SORT[mode] then return false end
+	local ui = DyeingDownTheHouseDB.ui
+	ui.shadeSort, ui.shadeSortDir = mode, dir or SHADE_DEFAULT_DIR[mode]
+	ns.Refresh()
+	return true
+end
+
+function ns.CycleShadeSort(mode)
+	if not VALID_SHADE_SORT[mode] then return end
+	local ui = DyeingDownTheHouseDB.ui
+	if ui.shadeSort == mode then
+		ui.shadeSortDir = (ui.shadeSortDir == "asc") and "desc" or "asc"
+	else
+		ui.shadeSort, ui.shadeSortDir = mode, SHADE_DEFAULT_DIR[mode]
+	end
+	ns.Refresh()
+end
+
+-- The shade rows the By Dye tab shows: the search applied, families the player has
+-- hidden dropped, then sorted.
+--
+-- A shade of a hidden family is hidden too. Unticking Black means "I don't care
+-- about black", and leaving its twelve shade names in the list while the family
+-- itself is gone from the other tab would be the addon disagreeing with itself.
+--
+-- The "unattributed" remainder rides along as a row of its own wherever one
+-- exists, so a migrated family goal can be seen and cleared rather than being a
+-- number that only shows up in a total.
+function ns.GetDisplayShades()
+	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
+	local hidden = ui.hiddenDyes or {}
+	local needle = (ui.search or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+
+	local order = {}
+	for i, color in ipairs(ns.COLORS) do order[color] = i end
+
+	local rows = {}
+	for _, shade in ipairs(ns.SHADES or {}) do
+		if shade.color and not hidden[shade.color] then
+			local match = needle == ""
+				or shade.name:lower():find(needle, 1, true)
+				or shade.color:lower():find(needle, 1, true)
+			if match then
+				rows[#rows + 1] = {
+					kind = "shade",
+					name = shade.name,
+					key = shade.key,
+					color = shade.color,
+					guess = shade.guess,
+					goal = ns.GetShadeGoal(shade.name),
+					index = order[shade.color] or 99,
+				}
+			end
+		end
+	end
+
+	for _, color in ipairs(ns.COLORS) do
+		local left = ns.GetUnassignedGoal(color)
+		if left > 0 and not hidden[color] then
+			local label = color:gsub("^%l", string.upper) .. " (unassigned)"
+			if needle == "" or label:lower():find(needle, 1, true) then
+				rows[#rows + 1] = {
+					kind = "unassigned",
+					name = label,
+					color = color,
+					goal = left,
+					index = order[color] or 99,
+				}
+			end
+		end
+	end
+
+	local mode, dir = ns.GetShadeSort()
+	local asc = (dir == "asc")
+	table.sort(rows, function(a, b)
+		if mode == "goal" then
+			if a.goal ~= b.goal then
+				if asc then return a.goal < b.goal else return a.goal > b.goal end
+			end
+		elseif mode == "family" then
+			if a.index ~= b.index then
+				if asc then return a.index < b.index else return a.index > b.index end
+			end
+		elseif a.name ~= b.name then
+			if asc then return a.name < b.name else return a.name > b.name end
+		end
+		return a.name < b.name
+	end)
+	return rows
+end
+
+--------------------------------------------------------------------------------
 -- Opening a row
 --
 -- There used to be two tabs and two sort systems here, because a dye and a color
@@ -1600,6 +1823,20 @@ function ns.ToggleColor(color)
 	local ui = DyeingDownTheHouseDB.ui
 	ui.expanded[color] = (not ui.expanded[color]) or nil
 	ns.Refresh()
+end
+
+local VALID_TAB = { color = true, dye = true }
+
+function ns.GetTab()
+	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
+	return VALID_TAB[ui.tab] and ui.tab or "color"
+end
+
+function ns.SetTab(tab)
+	if not VALID_TAB[tab] then return false end
+	DyeingDownTheHouseDB.ui.tab = tab
+	ns.Refresh()
+	return true
 end
 
 function ns.SetAllColorsExpanded(open)
@@ -1919,6 +2156,12 @@ SlashCmdList.DYEINGDOWNTHEHOUSE = function(msg)
 		else
 			Print("usage: /dye sort <alpha | price | owned>")
 		end
+	elseif cmd == "tab" then
+		if ns.SetTab(rest) then
+			Print("showing the " .. rest .. " tab.")
+		else
+			Print("usage: /dye tab <color | dye>")
+		end
 	elseif cmd == "expand" or cmd == "collapse" then
 		ns.SetAllColorsExpanded(cmd == "expand")
 		Print(cmd == "expand" and "all colors opened." or "all colors closed.")
@@ -1981,6 +2224,7 @@ SlashCmdList.DYEINGDOWNTHEHOUSE = function(msg)
 		print("  /dye sort <alpha | price | owned> — change the order (price = cost to make)")
 		print("  /dye scan — price the flowers from your chosen price source")
 		print("  /dye source [auto|tsm|auctionator|blizzard] — where prices come from")
+		print("  /dye tab <color | dye> — switch between the totals and the color names")
 		print("  /dye expand | collapse — open or close every color")
 		print("  /dye hidezero — toggle hiding colors you have no dye of")
 		print("  /dye lock | unlock — freeze or free the frame")

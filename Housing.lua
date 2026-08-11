@@ -17,10 +17,11 @@ local ADDON, ns = ...
 --     decor's dye slots outright, applied and previewed, so none of this depends on
 --     Blizzard's layout. The frame walk is still here behind it, because 12.1 is
 --     moving and an API this new can be renamed as easily as a frame was.
---   * ONE ROW PER COLOUR, NOT PER SLOT. The goal is per-colour, so two slots
---     wearing two blues are one goal — two edit boxes writing the same value would
---     fight, and show the player two answers to one question. A colour used twice
---     says so ("x2"), because that's genuinely how many dyes the decor will spend.
+--   * ONE ROW PER SHADE. Goals live on shade names, so two slots wearing two
+--     different blues are two separate goals and get two rows. Two slots wearing
+--     the SAME shade are one row with an "x2", because that is one goal and two
+--     dyes spent. (This grouped by FAMILY until goals moved onto shades, when
+--     merging two blues would have merged two numbers that aren't the same one.)
 --   * IT BORROWS BLIZZARD'S ART. The background and header are read off the panel
 --     above at runtime rather than hardcoded to an atlas name, so a reskin carries
 --     over for free and there's no name to guess wrong.
@@ -215,46 +216,52 @@ end
 -- By the game's own shade record ID first, since Discover.lua fills that index in
 -- from C_DyeColor and it can't be misspelled. Failing that, by the shade's NAME
 -- through ns.SHADES, which is what carries a client where the API is absent.
-local function ColorFor(name, colorID)
+-- Returns the shade's own name and its family. The name matters now: goals are set
+-- against shades, and the panel is the one place that knows exactly which shade
+-- you're looking at.
+local function ShadeFor(name, colorID)
 	if colorID and ns.SHADE_BY_COLORID then
 		local shade = ns.SHADE_BY_COLORID[colorID]
-		if shade and shade.color then return shade.color end
+		if shade and shade.color then return shade.name, shade.color end
 	end
 	if type(name) == "string" then
 		local lower = name:lower()
+		local shade = ns.shadeByKey and ns.shadeByKey[lower]
+		if shade and shade.color then return shade.name, shade.color end
+		-- An exact ITEM name ("Blue Housing Dye") names a family and no shade.
 		local byName = ns.byName and ns.byName[lower]
-		if byName and byName.kind == "dye" then return byName.color end
-		for _, shade in ipairs(ns.SHADES or {}) do
-			if shade.name:lower() == lower then return shade.color end
-		end
+		if byName and byName.kind == "dye" then return nil, byName.color end
 	end
 	return nil
 end
 
--- One entry per COLOR, not per slot.
+-- One entry per SHADE.
 --
--- The goal is per-colour, so two slots wearing two blues are one goal and must be
--- one row — two edit boxes writing the same value would fight each other and show
--- the player two answers. Where a colour is used more than once the count comes
--- with it, because that's genuinely how many dyes this decor will spend.
-local function CurrentColors(pane)
+-- This used to group by family, back when the goal was a family number and two
+-- boxes writing it would have fought each other. Goals live on shades now, so two
+-- slots wearing two different blues are two separate goals and want two rows —
+-- grouping them would merge numbers that are not the same number.
+--
+-- Two slots wearing the SAME shade are still one row, with the count, because
+-- that genuinely is one goal and two dyes spent.
+--
+-- A slot whose shade can't be identified but whose family can still gets a row: it
+-- carries the family's unattributed goal, which is the only number available for
+-- it and is better than showing nothing.
+local function CurrentShades(pane)
 	local slots = SlotsFromAPI() or SlotsFromFrames(pane)
-	local byColor, order = {}, {}
+	local seen, order = {}, {}
 	for _, slot in ipairs(slots or {}) do
-		local color = ColorFor(slot.name, slot.colorID)
+		local shadeName, color = ShadeFor(slot.name, slot.colorID)
 		if color then
-			local row = byColor[color]
+			local key = shadeName or ("~" .. color)
+			local row = seen[key]
 			if not row then
-				row = { color = color, slots = 0, names = {} }
-				byColor[color] = row
+				row = { name = shadeName, color = color, slots = 0 }
+				seen[key] = row
 				order[#order + 1] = row
 			end
 			row.slots = row.slots + 1
-			if slot.name then
-				local dup = false
-				for _, n in ipairs(row.names) do if n == slot.name then dup = true end end
-				if not dup then row.names[#row.names + 1] = slot.name end
-			end
 		end
 	end
 	return order
@@ -363,8 +370,15 @@ local function PanelGap(outer)
 end
 
 local function CommitRow(row)
-	if not (row and row.target) then return end
-	ns.SetGoal(row.target, tonumber(row.edit:GetText()) or 0)
+	if not row then return end
+	local n = tonumber(row.edit:GetText()) or 0
+	if row.shadeName then
+		ns.SetShadeGoal(row.shadeName, n)
+	elseif row.color then
+		-- No shade to attribute it to, so it goes in the family's unattributed
+		-- bucket — the same place a pre-shades goal lands.
+		ns.SetUnassignedGoal(row.color, n)
+	end
 	row.edit:ClearFocus()
 	if ns.Refresh then ns.Refresh() end
 end
@@ -480,7 +494,7 @@ local function UpdatePanel()
 	local shownOk, shown = pcall(pane.IsShown, pane)
 	if not (shownOk and shown) then if box then box:Hide() end return end
 
-	local colors = CurrentColors(pane)
+	local colors = CurrentShades(pane)
 	if not colors or #colors == 0 then if box then box:Hide() end return end
 
 	EnsureBox(pane)
@@ -498,20 +512,18 @@ local function UpdatePanel()
 
 	for index, entry in ipairs(colors) do
 		local row = EnsureRow(index)
-		row.target = entry.color
+		row.shadeName = entry.name
+		row.color = entry.color
 
 		local sw = (ns.SWATCH and ns.SWATCH[entry.color]) or { 0.6, 0.6, 0.6 }
 		row.swatch:SetColorTexture(sw[1], sw[2], sw[3])
 
-		-- The panel names a SHADE and the goal is on its FAMILY, so say both. Without
-		-- the family the row would read "Midnight Blue" over a number that silently
-		-- counts every blue dye, which is the sort of quiet mismatch that makes
-		-- someone think the addon is miscounting.
+		-- The number you type is against the SHADE; what it costs is the family. Say
+		-- both, or the row reads "Midnight Blue" over a count of every blue dye you
+		-- own, which is the sort of quiet mismatch that looks like miscounting.
 		local family = entry.color:gsub("^%l", string.upper)
-		local shades = table.concat(entry.names, ", ")
-		local label = (shades ~= "" and shades ~= family)
-			and ("%s  (%s)"):format(shades, family) or family
-		-- More than one slot wearing this colour means more than one dye spent.
+		local label = entry.name and ("%s  (%s)"):format(entry.name, family) or family
+		-- Two slots wearing the same shade is one goal and two dyes spent.
 		if entry.slots > 1 then label = ("%s  x%d"):format(label, entry.slots) end
 		row.name:SetText(label)
 
@@ -536,8 +548,9 @@ local function UpdatePanel()
 
 		-- Don't stomp what the player is typing.
 		if not row.edit:HasFocus() then
-			local goal = ns.GetGoal(entry.color) or 0
-			row.edit:SetText(goal > 0 and tostring(goal) or "")
+			local goal = entry.name and ns.GetShadeGoal(entry.name)
+				or ns.GetUnassignedGoal(entry.color)
+			row.edit:SetText((goal or 0) > 0 and tostring(goal) or "")
 		end
 		row:Show()
 	end

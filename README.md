@@ -24,8 +24,10 @@ exact moment you know it.
 
 ## 📋 It remembers, so you don't have to
 
-`/dye` opens the window. Nine rows, one per color — because nine dyes is what the
-game has now:
+`/dye` opens the window on two tabs.
+
+**By Color** — nine rows, one per color, because nine dyes is what the game has
+now:
 
 ```
 Color       Have   Flowers   Makeable   Cost      Dye Needed
@@ -37,6 +39,12 @@ Color       Have   Flowers   Makeable   Cost      Dye Needed
 Open a color and you get two things: the flowers it's made from, cheapest first, and
 every shade that color paints — all 77 of them, so you can see that one Blue Housing
 Dye covers Alliance Blue, Midnight Blue, Tranquility Blue and the rest.
+
+**By Dye** — the 77 color names, one row each, and this is where you say what you
+want. Five Alliance Blue for the wall, three Midnight Blue for the trim. What that
+*costs* is eight Blue Housing Dye, and the By Color tab has already worked that out.
+The number is typed in one place and added up in the other, so the two can never
+drift apart.
 
 "Have" means **everything** — every character's bags, every character's bank, and the
 Warband bank, all totalled. That green you were sure you were out of might be sitting
@@ -107,6 +115,7 @@ and collapses to a slim title bar if you'd rather tuck it away than close it.
 - `/dye source <auto|tsm|auctionator|blizzard>` — where prices come from
 - `/dye search <text>` — filter by color, or by a shade name like "obsidium"
 - `/dye sort <alpha | price | owned>` — change the order (price = cost to make)
+- `/dye tab <color | dye>` — switch tabs
 - `/dye expand` · `/dye collapse` — open or close every color
 - `/dye hidezero` — hide colors you have no dye of
 - `/dye lock` · `/dye unlock` — freeze or free the window
