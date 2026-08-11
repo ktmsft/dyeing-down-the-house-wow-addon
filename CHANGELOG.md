@@ -68,13 +68,14 @@ addon is rebuilt to match, which is why this is a 2.0.
   recipe, and a green check on the cheapest flower to make that color out of. Ten
   of one flower makes a dye and a color has up to fifteen to choose from, so that
   last one is the only part of the decision the window doesn't help with.
-- **The flowers each color is made from are read from the station too.** Standing
-  at a Dye Station, the addon reads its nine recipes and takes the flower list
-  straight off them, along with how many flowers one dye costs. It's remembered,
-  so the numbers are still right when you're nowhere near a station. Blizzard
-  moving a flower between colors now fixes itself on your next visit instead of
-  waiting for an update from me — and the last hand-maintained table in the addon
-  stops being one.
+- **The flowers each color is made from come from the game.** The list you get is
+  what the Dye Station's own recipes say — checked against them, not carried over
+  from the old pigment ones — so it's right from the first login, station visit or
+  no station visit. Standing at a station the addon reads them again and remembers
+  what it saw, so if Blizzard moves a flower between colors it fixes itself on
+  your next visit rather than waiting for an update from me. Same for how many
+  flowers one dye costs. The last hand-maintained table in the addon stops being
+  one.
 - **Window opacity is adjustable** in the options. It starts exactly where it
   always was; drag it down if you'd rather see the house through it.
 
