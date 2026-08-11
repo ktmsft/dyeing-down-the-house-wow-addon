@@ -2,7 +2,7 @@
 
 All notable changes to Dyeing Down The House are recorded here.
 
-## [2.0.0] — unreleased (Curse of Ula'tek, 12.1)
+## [2.0.0] — 2026-08-11 (Curse of Ula'tek, 12.1)
 
 Blizzard rebuilt the dye system in Curse of Ula'tek. Pigments are gone, the 62 dye
 items became nine, and crafting is one step at the dye station instead of two. The
