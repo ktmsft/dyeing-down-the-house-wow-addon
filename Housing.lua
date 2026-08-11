@@ -269,6 +269,66 @@ local TOP_PAD   = 12   -- breathing room under it, before the first row
 local ROW_H     = 32
 local BOTTOM_PAD = 12
 
+--------------------------------------------------------------------------------
+-- Borrowing Blizzard's panel art
+--
+-- The panel has to look like it belongs under theirs. The way to guarantee that is
+-- not to find out what the housing atlas is called and hardcode it — that's a name
+-- to guess wrong now and a name to break later. It's to READ the art off the live
+-- panel and apply the same values to ours, so a reskin carries over for free.
+--
+-- Everything here is feature-detected and pcall'd, and each can fail on its own:
+-- no atlas is survivable (a plain dark fill still reads as a panel), no header is
+-- survivable (the panel just has no title strip).
+--------------------------------------------------------------------------------
+
+-- Read `root.a.b.c`, relative to a frame rather than to _G.
+local function FollowFrom(root, path)
+	local node = root
+	for _, part in ipairs(path) do
+		local ok, nxt = pcall(function() return node[part] end)
+		if not ok or nxt == nil then return nil end
+		node = nxt
+	end
+	return node
+end
+
+-- Copy one texture's appearance onto another. Atlas first, because that's how the
+-- modern UI is built and it carries its own sizing; a plain file path with tex
+-- coords is the older shape and still worth handling.
+local function CopyArt(dest, source)
+	if not (dest and source) then return false end
+	local atlas = nil
+	pcall(function() atlas = source.GetAtlas and source:GetAtlas() end)
+	if atlas then
+		local ok = pcall(function() dest:SetAtlas(atlas, true) end)
+		if ok then return true end
+	end
+	local file = nil
+	pcall(function() file = source.GetTexture and source:GetTexture() end)
+	if file then
+		local ok = pcall(function()
+			dest:SetTexture(file)
+			dest:SetTexCoord(source:GetTexCoord())
+		end)
+		if ok then return true end
+	end
+	return false
+end
+
+-- How far a Blizzard panel's background texture overhangs its frame, so ours can
+-- overhang by the same amount and the borders line up. Read rather than assumed:
+-- the customize pane is a 269x280 frame under a 289x300 texture, which is a 10px
+-- bleed on every side, and that number is theirs to change.
+local function ArtBleed(texture, frame)
+	local bx, by = 0, 0
+	pcall(function()
+		bx = math.max(0, (texture:GetWidth() - frame:GetWidth()) / 2)
+		by = math.max(0, (texture:GetHeight() - frame:GetHeight()) / 2)
+	end)
+	return bx, by
+end
+
 local function CommitRow(row)
 	if not (row and row.target) then return end
 	ns.SetGoal(row.target, tonumber(row.edit:GetText()) or 0)
