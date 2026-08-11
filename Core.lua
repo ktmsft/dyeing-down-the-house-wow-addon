@@ -184,6 +184,14 @@ local defaults = {
 	-- row disappears.
 	unassigned = {},
 	learned = {},       -- [key] = itemID discovered by name match
+	-- [color] = { seen = ts, ids = { itemID, ... } } — which flowers make that
+	-- colour, read off the Dye Station's own recipe. Cached because the recipes are
+	-- only readable with the station's window open, while Makeable and Cost are
+	-- needed everywhere. Merged per colour, never wholesale. See Discover.lua.
+	learnedHerbs = {},
+	-- Flowers per dye, likewise read off the recipe rather than assumed. Absent
+	-- until a station has been visited; Data.lua's 10 stands in until then.
+	learnedHerbsPerDye = nil,
 	prices = {},        -- [key] = { copper = n, seen = ts, source = "ah" }
 	-- Where prices come from. "auto" takes the best source installed; naming one
 	-- pins it. See Prices.lua.

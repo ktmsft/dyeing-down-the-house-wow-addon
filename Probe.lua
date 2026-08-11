@@ -39,6 +39,13 @@ local ADDON, ns = ...
 --   station  the Dye Station's crafting window: the paths Crafting.lua hooks, the
 --            shape of a recipe row, and the schematic panel. Open the station
 --            first.
+--   herbs    which flowers make which colour, read off the station's recipes and
+--            diffed against what Data.lua shipped. The last carried-over table in
+--            the addon. Open the station first.
+--   shades   what C_DyeColor said about the nine families Data.lua guessed at,
+--            diffed against what shipped. Needs nothing open.
+--   flyout   the flower picker, and why it has no green checks on it. Open a dye
+--            recipe and click its reagent slot first.
 --   api      the Enums and C_ namespaces behind the dye system. THIS IS THE ONE TO
 --            REACH FOR FIRST. Frame-scraping was only ever a way in because I
 --            didn't know a dyeColorCategoryID existed; now that categories are
@@ -1062,6 +1069,518 @@ local function ProbeStation()
 end
 
 --------------------------------------------------------------------------------
+-- Section: herbs — which flowers make which colour, station vs Data.lua
+--
+-- The last thing in the addon that was carried over rather than read. Discover.lua
+-- now reads it off the station's own recipes and corrects the tables at runtime,
+-- which fixes the addon but not the file — so this is how the SHIPPED fallback
+-- gets checked, and corrected deliberately, instead of drifting further from the
+-- game every patch while runtime discovery quietly papers over it.
+--
+-- It diffs against ns.HERB_MAP_SHIPPED, the snapshot Discover takes at load,
+-- rather than against the live tables. Discovery has already folded the game's
+-- answer into those by the time anyone runs this, and diffing a table against the
+-- thing that just rewrote it reports "no differences" however wrong the file was.
+--
+-- Read-only, like every other section: it calls ns.ReadStationHerbMap, which is
+-- split out from the learning path precisely so a diagnostic never writes.
+--------------------------------------------------------------------------------
+
+-- The colours `herb` should end up with, worked out exactly the way
+-- ns.ApplyHerbMap works it out — so the paste-ready block below says what the
+-- addon is already doing rather than something close to it.
+local function CorrectedColors(shippedColors, stationColors, readColors)
+	local want, out = {}, {}
+	for _, color in pairs(shippedColors) do
+		if not readColors[color] then want[color] = true end
+	end
+	for color in pairs(stationColors) do want[color] = true end
+	for _, color in ipairs(ns.COLORS or {}) do
+		if want[color] then out[#out + 1] = color end
+	end
+	return out
+end
+
+local function SameColors(a, b)
+	if #a ~= #b then return false end
+	local seen = {}
+	for _, color in ipairs(a) do seen[color] = true end
+	for _, color in ipairs(b) do if not seen[color] then return false end end
+	return true
+end
+
+local function ProbeHerbs()
+	W("== herbs ==")
+	W("Which flowers make which colour, read off the Dye Station's own recipes.")
+	W("OPEN THE DYE STATION'S CRAFTING WINDOW FIRST. Away from it there are no")
+	W("recipes to read and this can only report that.")
+	W("")
+
+	if type(ns.ReadStationHerbMap) ~= "function" then
+		W("  Discover.lua isn't loaded. If a new file seems to do nothing, check the")
+		W("  dev loader's file list first -- it's gitignored and a reset does not")
+		W("  regenerate it. Run tools/make-dev-toc.ps1.")
+		W("")
+		return
+	end
+
+	local ok, map, meta = ns.ReadStationHerbMap()
+	if not ok then
+		W("  the API did not answer at all: %s", tostring(map))
+		W("")
+		return
+	end
+
+	-- Every dye recipe recognised, whether or not it yielded flowers. The first
+	-- version of this section reported "nothing read" and could not say WHY: it had
+	-- found all nine recipes and rejected them for having no reagents, and those are
+	-- completely different problems with completely different fixes.
+	W("-- dye recipes recognised in this window --")
+	if meta.found == 0 then
+		W("  none. This is not the Dye Station, or its recipes do not name one of the")
+		W("  nine dyes as their output.")
+	end
+	for _, row in ipairs(meta.seen or {}) do
+		W("  %-8s recipeID %-9s %-22s flowers %-4d %s", row.color, tostring(row.recipeID),
+			tostring(row.name), row.reagents,
+			row.viaSalvage and "(via salvage list)"
+				or (row.reagents > 0 and ("(via %d reagent slot(s))"):format(row.slots)
+					or "<- NO FLOWERS FOUND"))
+	end
+	W("")
+
+	-- quantityMin/quantityMax on the schematic.
+	--
+	-- These sound like the OUTPUT and are not, on these recipes. The first version of
+	-- this section read them that way, saw 10/10, and reported that a craft makes ten
+	-- dyes and Makeable was understating tenfold. It isn't and it wasn't: 10 is what
+	-- the craft EATS. Blizzard's own description is "Create one <Colour> Housing
+	-- Dye", the station's reagent line reads "24/10", and a salvage recipe consumes a
+	-- quantity and produces loot.
+	--
+	-- Left in, reworded, rather than deleted: an addon that assumes one dye per craft
+	-- should say out loud where that assumption is checked, and this is the field
+	-- that would show it changing.
+	W("-- quantityMin / quantityMax (the SALVAGE INPUT, not the output) --")
+	local inMin, inMax, mixed = nil, nil, false
+	for _, row in ipairs(meta.seen or {}) do
+		W("  %-8s quantityMin %s   quantityMax %s", row.color,
+			tostring(row.outputMin), tostring(row.outputMax))
+		if row.outputMin then
+			if inMin and inMin ~= row.outputMin then mixed = true end
+			inMin = inMin or row.outputMin
+		end
+		if row.outputMax then
+			if inMax and inMax ~= row.outputMax then mixed = true end
+			inMax = inMax or row.outputMax
+		end
+	end
+	if inMin == nil and inMax == nil then
+		W("  NOT REPORTED -- the recipes carry no quantity at all.")
+	elseif mixed then
+		W("  >> RECIPES DISAGREE on the input count. Worth a look: every colour has")
+		W("     cost the same ten flowers so far.")
+	else
+		W("  >> %s flowers eaten per craft, one dye produced.", tostring(inMin))
+		W("     Matches the reagent line and the hand count, so ns.HERBS_PER_DYE is")
+		W("     now READ rather than assumed. One dye out is Blizzard's own wording")
+		W("     in the recipe description -- if a craft ever yields more, this is the")
+		W("     line that will stop matching and Makeable will need the multiplier.")
+	end
+	W("")
+
+	-- 12.1's dye recipes are SALVAGE recipes (isSalvageRecipe = true, the Milling
+	-- shape), so their flowers come from GetSalvagableItemIDs rather than from the
+	-- schematic's reagents. If that has come back empty too, dump the raw shapes:
+	-- guessing at a third API without looking is how the reagent path got written.
+	if meta.recipes == 0 then
+		W("-- nothing yielded flowers, so here is the raw shape --")
+		W("")
+		W("  C_TradeSkillUI functions on this client:")
+		local fns = {}
+		pcall(function()
+			for k, v in pairs(_G.C_TradeSkillUI or {}) do
+				if type(k) == "string" and type(v) == "function" then fns[#fns + 1] = k end
+			end
+		end)
+		table.sort(fns)
+		for _, fn in ipairs(fns) do
+			-- Flag the ones that look like they serve a salvage recipe's item list.
+			local lower = fn:lower()
+			W("    %s%s", fn,
+				(lower:find("salvag") or lower:find("reagent") or lower:find("schematic"))
+					and "   <--" or "")
+		end
+		W("")
+
+		local first = (meta.seen or {})[1]
+		if not first then
+			W("  no dye recipe to dump.")
+		else
+			W("  full schematic for %s (recipeID %s):", tostring(first.name),
+				tostring(first.recipeID))
+			local got, sch = pcall(C_TradeSkillUI.GetRecipeSchematic, first.recipeID, false)
+			DumpValue("schematic", got and sch or nil, 2, 5)
+			W("")
+			for _, name in ipairs({ "GetSalvagableItemIDs", "GetSalvageableItemIDs" }) do
+				local fn = Get(_G.C_TradeSkillUI, name)
+				if type(fn) == "function" then
+					local sok, result = pcall(fn, first.recipeID)
+					DumpValue(name .. "()", sok and result or ("error: " .. tostring(result)), 2, 3)
+				else
+					W("    %s: not present on this client", name)
+				end
+			end
+		end
+		W("")
+		return
+	end
+
+	W("  %d dye recipes yielded flowers", meta.recipes)
+	if meta.perDye then
+		W("  flowers per dye: %d  (every recipe agreed)", meta.perDye)
+	elseif not meta.quantityRead then
+		W("  flowers per dye: NOT REPORTED -- no recipe carried a quantity at all.")
+		W("  ns.HERBS_PER_DYE stays at %s, which was counted at a station by hand.",
+			tostring(ns.HERBS_PER_DYE))
+	else
+		W("  flowers per dye: DISAGREED -- recipes wanted different quantities, or")
+		W("  more than one reagent slot each. ns.HERBS_PER_DYE left at %s.",
+			tostring(ns.HERBS_PER_DYE))
+	end
+	W("")
+
+	-- Which colours the station actually spoke about. A colour it said nothing about
+	-- keeps Data.lua's list, and must not be reported as "the station dropped it".
+	local readColors, colorCount = {}, 0
+	for color, ids in pairs(map) do
+		if type(ids) == "table" and #ids > 0 then
+			readColors[color] = true
+			colorCount = colorCount + 1
+		end
+	end
+	W("  colours the station answered for: %d of %d", colorCount, #(ns.COLORS or {}))
+	W("")
+
+	-- Per herb, what shipped and what the station says.
+	local shipped, station = {}, {}
+	for color, ids in pairs(ns.HERB_MAP_SHIPPED or {}) do
+		for _, id in ipairs(ids) do
+			shipped[id] = shipped[id] or {}
+			shipped[id][#shipped[id] + 1] = color
+		end
+	end
+	for color, ids in pairs(map) do
+		for _, id in ipairs(ids) do
+			station[id] = station[id] or {}
+			station[id][color] = true
+		end
+	end
+
+	W("-- per colour: the station against what Data.lua shipped --")
+	for _, color in ipairs(ns.COLORS or {}) do
+		local ids = map[color]
+		if not (type(ids) == "table" and #ids > 0) then
+			W("  %-8s the station said nothing -- Data.lua's list stands", color)
+		else
+			local has = {}
+			for _, id in ipairs(ids) do has[id] = true end
+			local shippedIDs = (ns.HERB_MAP_SHIPPED or {})[color] or {}
+			local shippedHas = {}
+			for _, id in ipairs(shippedIDs) do shippedHas[id] = true end
+
+			local extra, missing = {}, {}
+			for _, id in ipairs(ids) do
+				if not shippedHas[id] then extra[#extra + 1] = id end
+			end
+			for _, id in ipairs(shippedIDs) do
+				if not has[id] then missing[#missing + 1] = id end
+			end
+
+			W("  %-8s station %d, shipped %d%s", color, #ids, #shippedIDs,
+				(#extra == 0 and #missing == 0) and "   -- identical" or "")
+			for _, id in ipairs(extra) do
+				W("      +  %-8d %s", id, NameForID(id) or "(name not cached)")
+			end
+			for _, id in ipairs(missing) do
+				-- The one that matters. A flower Data.lua counts toward a colour that
+				-- the station will not accept for it is an OVERCOUNT: Makeable claims
+				-- dyes you cannot make.
+				W("      -  %-8d %s   <- shipped counts this, the station does not",
+					id, NameForID(id) or "(name not cached)")
+			end
+		end
+	end
+	W("")
+
+	W("-- corrections for Data.lua --")
+	W("Paste-ready, and only the herbs whose colours actually change. This is what")
+	W("discovery is already doing at runtime; writing it into the file is what stops")
+	W("the fallback drifting further every patch.")
+	W("")
+
+	local changes, seen = 0, {}
+	local function Report(id)
+		if seen[id] then return end
+		seen[id] = true
+		local herb = ns.byID and ns.byID[id]
+		local before = shipped[id] or {}
+		local after = CorrectedColors(before, station[id] or {}, readColors)
+		if SameColors(before, after) then return end
+		changes = changes + 1
+
+		local quoted = {}
+		for i, color in ipairs(after) do quoted[i] = ('"%s"'):format(color) end
+		local name = (herb and herb.name) or NameForID(id) or "?"
+		W('  { key = "%s", name = "%s", id = %d, colors = { %s } },%s',
+			(herb and herb.key) or ("herb_" .. id), name, id,
+			table.concat(quoted, ", "),
+			(herb and " ") or "   -- NEW: not in Data.lua at all")
+	end
+
+	for id in pairs(shipped) do Report(id) end
+	for id in pairs(station) do Report(id) end
+
+	if changes == 0 then
+		W("  none. Every colour the station answered for matches what shipped --")
+		W("  the carried-over map was right.")
+	else
+		W("")
+		W("  %d herb(s) differ.", changes)
+	end
+	W("")
+end
+
+--------------------------------------------------------------------------------
+-- Section: shades — what the game said about the nine guessed families
+--
+-- Data.lua ships nine shades flagged `guess = true`, and four of them — the ex-teal
+-- ones — were placed by exactly the reasoning the herb map disproved: that teal
+-- became blue. C_DyeColor settles it at every login, so the ADDON is right in game
+-- whatever the file says; this is about the file, which is what a client missing
+-- C_DyeColor falls back on and what the tests run against.
+--
+-- Needs no window open. Discovery runs at login, so by the time you read this it
+-- has already answered.
+--------------------------------------------------------------------------------
+
+local function ProbeShades()
+	W("== shades ==")
+	W("What C_DyeColor said about the families Data.lua could only guess at.")
+	W("Needs nothing open -- discovery ran at login.")
+	W("")
+
+	local d = ns.discovery or {}
+	W("  discovery ran: %s", tostring(d.ran))
+	W("  shades read %s, dye items %s, families placed %s, still pending %s",
+		tostring(d.shades), tostring(d.items), tostring(d.colors), tostring(d.pending))
+	if not d.ran then
+		W("")
+		W("  It has not run. Everything below is Data.lua talking to itself and proves")
+		W("  nothing -- C_DyeColor is missing, or login discovery failed.")
+		W("")
+		return
+	end
+
+	-- Anything still flagged is a shade the game did NOT confirm. On a live 12.1
+	-- client that should be none at all.
+	local unconfirmed = {}
+	for _, shade in ipairs(ns.SHADES or {}) do
+		if shade.guess then unconfirmed[#unconfirmed + 1] = shade end
+	end
+	W("  shades still unconfirmed by the game: %d", #unconfirmed)
+	for _, shade in ipairs(unconfirmed) do
+		W("      %-24s still guessed as %s", shade.name, tostring(shade.color))
+	end
+	W("")
+
+	W("-- the nine Data.lua guessed at --")
+	local wrong, right = 0, 0
+	for _, shade in ipairs(ns.SHADES or {}) do
+		local was = (ns.SHADE_MAP_SHIPPED or {})[shade.name:lower()]
+		if was and was.guess then
+			local agrees = (was.color == shade.color)
+			if agrees then right = right + 1 else wrong = wrong + 1 end
+			W("  %-24s shipped %-8s game %-8s  %s", shade.name,
+				tostring(was.color), tostring(shade.color),
+				shade.guess and "(STILL UNCONFIRMED)" or (agrees and "ok" or "<-- WRONG"))
+		end
+	end
+	W("")
+	W("  %d guessed right, %d wrong", right, wrong)
+	W("")
+
+	-- And the other 68, which were NOT guesses. A disagreement here is worth far
+	-- more than one above: it means a placement read off the old recipes -- the part
+	-- that was supposed to be solid -- has moved.
+	W("-- placements that were NOT guesses, and moved anyway --")
+	local moved = 0
+	for _, shade in ipairs(ns.SHADES or {}) do
+		local was = (ns.SHADE_MAP_SHIPPED or {})[shade.name:lower()]
+		if was and not was.guess and was.color ~= shade.color then
+			moved = moved + 1
+			W("  %-24s shipped %-8s game %-8s  <-- was NOT a guess", shade.name,
+				tostring(was.color), tostring(shade.color))
+		end
+	end
+	if moved == 0 then
+		W("  none. The 68 read off the old recipes all still hold.")
+	end
+	W("")
+
+	-- Shades the game knows and the file does not.
+	W("-- shades the game has that Data.lua never shipped --")
+	local added = 0
+	for _, shade in ipairs(ns.SHADES or {}) do
+		if not (ns.SHADE_MAP_SHIPPED or {})[shade.name:lower()] then
+			added = added + 1
+			W('  { name = "%s", color = "%s" },', shade.name, tostring(shade.color))
+		end
+	end
+	if added == 0 then W("  none.") end
+	W("")
+
+	W("-- corrections for Data.lua --")
+	local changes = 0
+	for _, shade in ipairs(ns.SHADES or {}) do
+		local was = (ns.SHADE_MAP_SHIPPED or {})[shade.name:lower()]
+		-- A shade the game confirmed where it sits still wants its `guess` flag
+		-- dropped, so "unchanged" is not the same as "nothing to write".
+		if was and (was.color ~= shade.color or (was.guess and not shade.guess)) then
+			changes = changes + 1
+			W('  { name = "%s",%s color = "%s" },%s', shade.name,
+				(" "):rep(math.max(1, 24 - #shade.name)), tostring(shade.color),
+				(was.color ~= shade.color) and ("   -- was " .. tostring(was.color)) or "")
+		end
+	end
+	if changes == 0 then
+		W("  none -- the file already agrees with the game.")
+	else
+		W("")
+		W("  %d shade(s) to rewrite. Every `guess = true` above can come off: the game", changes)
+		W("  has spoken for all of them.")
+	end
+	W("")
+end
+
+--------------------------------------------------------------------------------
+-- Section: flyout — the flower picker, and why it isn't marked
+--
+-- 12.1's dye recipes are salvage recipes, so clicking the reagent slot opens
+-- "Select Item to Salvage" rather than an ordinary reagent flyout. Crafting.lua
+-- used to find that flyout by looking for `elementData.reagent`, which the salvage
+-- picker doesn't carry — so the green checks silently stopped appearing on the only
+-- recipes this addon exists for. Nothing errored: the search walked every frame in
+-- the client and matched none.
+--
+-- This says which of the two is failing — the FIND, or the mark — because they look
+-- identical from the outside and need opposite fixes.
+--------------------------------------------------------------------------------
+
+local function ProbeFlyout()
+	W("== flyout ==")
+	W("OPEN A DYE RECIPE AND CLICK ITS REAGENT SLOT, so the flower picker is on")
+	W("screen, then run this. A flyout that isn't open cannot be found by anything.")
+	W("")
+
+	W("  ns.craftingHooked: %s", tostring(ns.craftingHooked))
+	W("  OpenProfessionsItemFlyout: %s",
+		type(_G.OpenProfessionsItemFlyout) == "function" and "present (hookable)" or "ABSENT")
+	W("  markHerbs setting: %s", tostring(
+		DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui and DyeingDownTheHouseDB.ui.markHerbs))
+	W("")
+
+	-- Every shown scrollbox with buttons in it. The picker is in here somewhere; the
+	-- question is what identifies it.
+	W("-- shown scrollboxes, and what their buttons carry --")
+	local found = 0
+	if type(_G.EnumerateFrames) == "function" then
+		local fr, guard = _G.EnumerateFrames(), 0
+		while fr and guard < MAX_FRAMES do
+			guard = guard + 1
+			if not Forbidden(fr) and Try(function() return fr:IsShown() end) then
+				local sb = Get(fr, "ScrollBox")
+				local frames = sb and Try(function() return sb:GetFrames() end)
+				if type(frames) == "table" and #frames > 0 then
+					found = found + 1
+					if found <= 6 then
+						W("  [%d] %s   (%d buttons)", found, (PathTo(fr)), #frames)
+
+						-- Does a button hand back an item ID, and do we know it? That is
+						-- exactly the test Crafting.lua now identifies the picker by.
+						local btn = frames[1]
+						local hasGetItemID = type(Get(btn, "GetItemID")) == "function"
+						W("      button:GetItemID  %s", hasGetItemID and "yes" or "NO")
+						if hasGetItemID then
+							local known, ids = 0, {}
+							for i = 1, math.min(#frames, 8) do
+								local id = Try(function() return frames[i]:GetItemID() end)
+								if id then
+									ids[#ids + 1] = tostring(id)
+									local entry = ns.byID and ns.byID[id]
+									if entry and entry.kind == "herb" then known = known + 1 end
+								end
+							end
+							W("      item IDs: %s", table.concat(ids, ", "))
+							W("      recognised as flowers: %d of %d   %s", known, #ids,
+								known > 0 and "<-- THIS IS THE FLOWER PICKER" or "")
+						end
+
+						-- And the old identifier, so the change is visible rather than
+						-- assumed: does anything here still carry a `.reagent`?
+						local ed = Try(function() return btn:GetElementData() end)
+						if type(ed) == "table" then
+							local keys = {}
+							pcall(function()
+								for k in pairs(ed) do keys[#keys + 1] = tostring(k) end
+							end)
+							table.sort(keys)
+							W("      elementData keys: %s",
+								#keys > 0 and table.concat(keys, ", ") or "(none)")
+							W("      elementData.reagent: %s",
+								Get(ed, "reagent") ~= nil and "present" or "ABSENT (the old test)")
+						else
+							W("      elementData: %s", type(ed))
+						end
+
+						-- Did we already put a mark on it?
+						W("      our mark: %s", Get(btn, "ddthVerdict") and "attached" or "none")
+					end
+				end
+			end
+			fr = _G.EnumerateFrames(fr)
+		end
+	end
+	if found == 0 then
+		W("  none. If the picker was open on screen, that is a real result worth")
+		W("  reporting -- it means it is not a ScrollBox-based flyout at all.")
+	elseif found > 6 then
+		W("  ...and %d more", found - 6)
+	end
+	W("")
+
+	-- If the picker was found, the mark still needs a verdict to show, and a verdict
+	-- needs prices. "Found it and had nothing to say" is a different problem again.
+	W("-- would there be anything to draw? --")
+	local dye = ns.byKey and ns.byKey[ns.probeColor or "purple"]
+	local color = dye and dye.color
+	if not color then
+		W("  no colour to test against.")
+	else
+		local priced, held = 0, 0
+		for _, herb in ipairs((ns.herbsByColor or {})[color] or {}) do
+			if ns.GetPrice and ns.GetPrice(herb.key) then priced = priced + 1 end
+			if ns.GetTotal and ns.GetTotal(herb.key) > 0 then held = held + 1 end
+		end
+		W("  %s: %d flowers, %d priced, %d held", color,
+			#((ns.herbsByColor or {})[color] or {}), priced, held)
+		W("  (the check/X compares flowers on PRICE. With none priced there is no")
+		W("   verdict to draw and the picker is left clean on purpose -- run a scan.)")
+	end
+	W("")
+end
+
+--------------------------------------------------------------------------------
 -- Output window — a plain selectable editbox, because chat can't be copied out of
 --------------------------------------------------------------------------------
 
@@ -1131,8 +1650,11 @@ function ns.RunProbe(section)
 	if section == "" or section == "deep"     then ProbeDeep();     ran = true end
 	if section == "" or section == "api"      then ProbeApi();      ran = true end
 	if section == "" or section == "station"  then ProbeStation();  ran = true end
+	if section == "" or section == "herbs"    then ProbeHerbs();    ran = true end
+	if section == "" or section == "shades"   then ProbeShades();   ran = true end
+	if section == "" or section == "flyout"   then ProbeFlyout();   ran = true end
 	if not ran then
-		W("unknown section '%s'. Try: api, addons, items, panel, swatches, deep, station, or nothing for all.", section)
+		W("unknown section '%s'. Try: api, addons, items, panel, swatches, deep, station, herbs, shades, flyout, or nothing for all.", section)
 	end
 
 	ShowOutput(table.concat(out, "\n"))

@@ -86,6 +86,11 @@ local function DecorateButton(button)
 end
 
 local function DecorateList()
+	-- The list laying itself out is the moment the station's recipes are readable,
+	-- and their reagents ARE the herb -> colour map. Discover.lua bounds this to one
+	-- read per visit, so calling it on every re-layout is free. See ns.TryLearnHerbs.
+	if ns.TryLearnHerbs then pcall(ns.TryLearnHerbs) end
+
 	local pf = _G.ProfessionsFrame
 	local rl = pf and pf.CraftingPage and pf.CraftingPage.RecipeList
 	local sb = rl and rl.ScrollBox
@@ -236,6 +241,38 @@ end
 -- Scrollboxes already hooked (the flyout is reused, so hook its Update once).
 local hookedFlyoutSB = setmetatable({}, { __mode = "k" })
 
+-- Is this scrollbox the flower picker?
+--
+-- It used to be identified by `elementData.reagent`, which is what an ordinary
+-- reagent flyout carries. 12.1's dye recipes are SALVAGE recipes and open a "Select
+-- Item to Salvage" picker instead, which doesn't carry it — so the checkmarks
+-- silently stopped appearing on the only recipes this addon exists for. Nothing
+-- errored; the loop simply walked every frame in the client and matched none.
+--
+-- So it is identified by its CONTENTS now: a scrollbox whose buttons hand back item
+-- IDs we know to be flowers IS the flower picker, whatever Blizzard is calling the
+-- field this week. Self-validating, and immune to the next rename — which is the
+-- same lesson the herb map and the dye panel both taught this release.
+local function LooksLikeFlowerPicker(frames)
+	for i = 1, math.min(#frames, 8) do
+		local btn = frames[i]
+		if type(btn.GetItemID) == "function" then
+			local ok, itemID = pcall(btn.GetItemID, btn)
+			local entry = ok and itemID and ns.byID[itemID]
+			if entry and entry.kind == "herb" then return true end
+		end
+	end
+
+	-- The pre-12.1 shape, kept as a fallback for an ordinary reagent flyout whose
+	-- items we happen not to know.
+	local first = frames[1]
+	if first and type(first.GetElementData) == "function" then
+		local ok, ed = pcall(first.GetElementData, first)
+		if ok and type(ed) == "table" and ed.reagent then return true end
+	end
+	return false
+end
+
 local function FindAndDecorateFlyout()
 	if type(EnumerateFrames) ~= "function" then return end
 	local fr, guard = EnumerateFrames(), 0
@@ -245,20 +282,16 @@ local function FindAndDecorateFlyout()
 			local sb = fr.ScrollBox
 			if sb and type(sb.GetFrames) == "function" then
 				local ok, frames = pcall(sb.GetFrames, sb)
-				local first = ok and frames and frames[1]
-				-- The reagent flyout's buttons expose an item ID and a .reagent.
-				if first and type(first.GetElementData) == "function" then
-					local ok2, ed = pcall(first.GetElementData, first)
-					if ok2 and type(ed) == "table" and ed.reagent then
-						if not hookedFlyoutSB[sb] then
-							hookedFlyoutSB[sb] = true
-							if type(sb.Update) == "function" then
-								hooksecurefunc(sb, "Update", function() DecorateFlyout(sb) end)
-							end
+				if ok and type(frames) == "table" and #frames > 0
+					and LooksLikeFlowerPicker(frames) then
+					if not hookedFlyoutSB[sb] then
+						hookedFlyoutSB[sb] = true
+						if type(sb.Update) == "function" then
+							hooksecurefunc(sb, "Update", function() DecorateFlyout(sb) end)
 						end
-						DecorateFlyout(sb)
-						return
 					end
+					DecorateFlyout(sb)
+					return
 				end
 			end
 		end

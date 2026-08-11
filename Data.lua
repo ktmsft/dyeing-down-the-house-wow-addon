@@ -107,43 +107,59 @@ ns.DYES = {
 --   guess  present and true when that family is INFERRED, not read from the game.
 --          Discover.lua clears it the moment C_DyeColor confirms the placement, and
 --          the window prints "family not confirmed" under any that are still set.
+--          NOTHING CARRIES IT NOW. Every one of the 77 was read from C_DyeColor on
+--          12.1 (10 August 2026). The field stays because a shade Blizzard adds
+--          mid-patch arrives unplaced and wants somewhere honest to say so.
 --
--- The 62 old shades keep the family their dye's pigment gave them, which is solid:
--- it was read off the recipes themselves. Three groups are marked `guess`:
---   * the four ex-teal shades, because Blizzard said only that teal split between
---     blue and green without saying which went where;
---   * five of the new colors whose name doesn't name a family (Klaxxi Amber,
---     Aethril Pink, Faded Mana, Stonetalon Brick, Petal Pink) — note there is no
---     pink family, so both pinks have to land somewhere else;
---   * nothing else. A color called "Verdant Green" is green.
+-- READ FROM THE GAME, and the reading moved sixteen of them.
+--
+-- Nine shipped as guesses and eight of those were right — including all four
+-- ex-teal ones, so "teal split between blue and green" held exactly as written.
+-- Note that it held HERE and failed for the herbs: the shades genuinely moved to
+-- blue and green, while the herbs that used to feed teal did not follow them. Two
+-- different questions that looked like one, which is most of why the herb map was
+-- wrong for so long. Klaxxi Amber was the single bad guess — yellow, actually
+-- orange.
+--
+-- THE OTHER SEVEN ARE THE INTERESTING ONES, because they were never guesses. They
+-- came off the old dyes' pigments, the part of this file that was described as
+-- solid, and they had been wrong since before 12.1:
+--
+--   Ironclaw       black  -> green      Vol'dun Taupe   brown  -> green
+--   Stormsteel     black  -> blue       Holy Oak Tan    yellow -> white
+--   Dusk Lily Grey blue   -> purple     Pinewood        yellow -> green
+--   Dark Gold      brown  -> yellow
+--
+-- Read them and they are obvious in hindsight: pinewood IS green, and a taupe is
+-- nearer green than brown. They read as safe because the name suggested a family
+-- and the old data agreed, so nobody looked. Only the ones I had already flagged as
+-- uncertain ever got checked — which is the failure worth remembering, because the
+-- flag was doing the opposite of its job: it made everything unflagged look
+-- verified.
 ns.SHADES = {
 	-- black
 	{ name = "Dark Iron",           color = "black" },
 	{ name = "Darkwood",            color = "black" },
-	{ name = "Ironclaw",            color = "black" },
 	{ name = "Obsidium Black",      color = "black" },
 	{ name = "Stormheim Grey",      color = "black" },
-	{ name = "Stormsteel",          color = "black" },
 	{ name = "Dark Obsidium",       color = "black" }, -- 12.1: the pre-12.0.5 Obsidium Black
 	-- blue
 	{ name = "Alliance Blue",       color = "blue" },
-	{ name = "Dusk Lily Grey",      color = "blue" },
 	{ name = "Midnight Blue",       color = "blue" },
 	{ name = "Nazjatar Navy",       color = "blue" },
 	{ name = "Zephras Blue",        color = "blue" },
-	{ name = "Tranquility Blue",    color = "blue" },                -- 12.1
-	{ name = "Kul Tiran Steel",     color = "blue", guess = true },  -- was teal
-	{ name = "Tidesage Teal",       color = "blue", guess = true },  -- was teal
-	{ name = "Vortex Teal",         color = "blue", guess = true },  -- was teal
+	{ name = "Stormsteel",          color = "blue" },                 -- was filed under black
+	{ name = "Tranquility Blue",    color = "blue" },                 -- 12.1
+	{ name = "Kul Tiran Steel",     color = "blue" },                 -- was teal
+	{ name = "Tidesage Teal",       color = "blue" },                 -- was teal
+	{ name = "Vortex Teal",         color = "blue" },                 -- was teal
 	-- brown
-	{ name = "Dark Gold",           color = "brown" },
 	{ name = "Earthen Brown",       color = "brown" },
 	{ name = "Heartwood",           color = "brown" },
 	{ name = "Kalimdor Sand",       color = "brown" },
 	{ name = "Mesquite Brown",      color = "brown" },
 	{ name = "Pale Umber",          color = "brown" },
 	{ name = "Timbermaw Brown",     color = "brown" },
-	{ name = "Vol'dun Taupe",       color = "brown" },
 	{ name = "Warm Teak",           color = "brown" },
 	{ name = "Dark Mesquite",       color = "brown" }, -- 12.1: the pre-12.0.5 Mesquite Brown
 	-- green
@@ -154,16 +170,20 @@ ns.SHADES = {
 	{ name = "Grizzly Hills Green", color = "green" },
 	{ name = "Lush Green",          color = "green" },
 	{ name = "Silversage Green",    color = "green" },
+	{ name = "Ironclaw",            color = "green" },                -- was filed under black
+	{ name = "Vol'dun Taupe",       color = "green" },                -- was filed under brown
+	{ name = "Pinewood",            color = "green" },                -- was filed under yellow
 	{ name = "Amani Green",         color = "green" },                -- 12.1
 	{ name = "Verdant Green",       color = "green" },                -- 12.1
 	{ name = "Tirisfal Green",      color = "green" },                -- 12.1
-	{ name = "Un'Goro Green",       color = "green", guess = true },  -- was teal
+	{ name = "Un'Goro Green",       color = "green" },                -- was teal
 	-- orange
 	{ name = "Bronze",              color = "orange" },
 	{ name = "Copper",              color = "orange" },
 	{ name = "Elwynn Pumpkin",      color = "orange" },
 	{ name = "Kodohide Brown",      color = "orange" },
 	{ name = "Foxflower Orange",    color = "orange" },               -- 12.1
+	{ name = "Klaxxi Amber",        color = "orange" },               -- 12.1; guessed yellow
 	-- purple
 	{ name = "Arcwine",             color = "purple" },
 	{ name = "Forsaken Plum",       color = "purple" },
@@ -172,8 +192,9 @@ ns.SHADES = {
 	{ name = "Netherstorm Fuchsia", color = "purple" },
 	{ name = "Nightsong Lilac",     color = "purple" },
 	{ name = "Void Violet",         color = "purple" },
-	{ name = "Aethril Pink",        color = "purple", guess = true }, -- 12.1; Aethril is a purple herb
-	{ name = "Faded Mana",          color = "purple", guess = true }, -- 12.1
+	{ name = "Dusk Lily Grey",      color = "purple" },               -- was filed under blue
+	{ name = "Aethril Pink",        color = "purple" },               -- 12.1
+	{ name = "Faded Mana",          color = "purple" },               -- 12.1
 	-- red
 	{ name = "Deep Mageroyal Red",  color = "red" },
 	{ name = "Firebloom Red",       color = "red" },
@@ -185,24 +206,23 @@ ns.SHADES = {
 	{ name = "Ratchet Rust",        color = "red" },
 	{ name = "Dusty Red",           color = "red" },                  -- 12.1
 	{ name = "Dark Mahogany",       color = "red" },                  -- 12.1: the pre-12.0.5 Mahogany
-	{ name = "Stonetalon Brick",    color = "red", guess = true },    -- 12.1
-	{ name = "Petal Pink",          color = "red", guess = true },    -- 12.1; no pink family to put it in
+	{ name = "Stonetalon Brick",    color = "red" },                  -- 12.1
+	{ name = "Petal Pink",          color = "red" },                  -- 12.1; no pink family to put it in
 	-- white
 	{ name = "Basic Birch",         color = "white" },
 	{ name = "Bone-White",          color = "white" },
 	{ name = "Highborne Marble",    color = "white" },
 	{ name = "Highland Birch",      color = "white" },
+	{ name = "Holy Oak Tan",        color = "white" },                -- was filed under yellow
 	{ name = "Pearl White",         color = "white" },                -- 12.1
 	-- yellow
 	{ name = "Brass",               color = "yellow" },
 	{ name = "Gold",                color = "yellow" },
-	{ name = "Holy Oak Tan",        color = "yellow" },
-	{ name = "Pinewood",            color = "yellow" },
 	{ name = "Sandfury Yellow",     color = "yellow" },
 	{ name = "Savannah Gold",       color = "yellow" },
 	{ name = "Sungrass Yellow",     color = "yellow" },
 	{ name = "Zandalari Gold",      color = "yellow" },
-	{ name = "Klaxxi Amber",        color = "yellow", guess = true }, -- 12.1
+	{ name = "Dark Gold",           color = "yellow" },               -- was filed under brown
 }
 
 -- Every herb. A herb turns into one or more colors' dyes at the station.
@@ -217,12 +237,30 @@ ns.SHADES = {
 -- deliberate: the tiers count separately because they're separate items, but they
 -- hide together in the options, by name.
 --
--- The IDs and the color groupings were read from the game before 12.1, off the
--- pigment each herb milled into. Removing the pigment step doesn't change which
--- herbs are which color, so they carry over — EXCEPT that every herb that fed teal
--- now feeds blue, because that's where the teal pigment itself converted to.
--- Tranquility Bloom is the tell: it was a teal/white herb, and 12.1's new blue is
--- called Tranquility Blue.
+-- READ FROM THE GAME on 12.1 (10 August 2026), off the Dye Station's own recipes:
+-- 17 flowers per color, except blue and green with 18. Discover.lua re-reads it at
+-- every station visit, so this is the fallback rather than the answer — but it is
+-- now a fallback that matches what the station said, which it did not before.
+--
+-- THE TEAL FOLD WAS WRONG, and it is worth saying how. The groupings were carried
+-- over from the pigment each herb milled into pre-12.1, on the reasoning that
+-- removing the middle step doesn't change which herbs are which color. That part
+-- held: every color came back identical except two. What did not hold was the
+-- exception bolted onto it — that every herb which fed teal now feeds BLUE,
+-- because the teal pigment itself converted to Blue Housing Dye.
+--
+-- It doesn't. An ex-teal herb dropped teal and kept whatever else it had:
+-- Lichbloom is black, Hochenblume is purple, Marrowroot is brown. Bruiseweed was
+-- teal only, so the fold had nowhere to put it but blue, and the station says
+-- green. Thirteen herbs in all, and blue was carrying every one of them — 31
+-- flowers against the real 18, so Makeable had been claiming blue dyes that could
+-- not be made.
+--
+-- The tell that convinced me was Tranquility Bloom: a teal/white herb, and 12.1's
+-- new blue is called Tranquility Blue. It is white only. The names rhymed and the
+-- inference was still wrong, which is the argument for reading the game rather
+-- than reasoning about it — an item conversion said nothing about the herbs that
+-- fed it, and one piece of corroboration made a guess feel like a finding.
 ns.HERBS = {
 	{ key = "adderstongue_36903",      name = "Adder's Tongue",      id = 36903, colors = { "brown", "green" } },
 	{ key = "akundasbite_152507",      name = "Akunda's Bite",       id = 152507, colors = { "blue" } },
@@ -238,7 +276,7 @@ ns.HERBS = {
 	{ key = "blessingblossom_210806",  name = "Blessing Blossom",    id = 210806, colors = { "black", "green" } },
 	{ key = "blessingblossom_210807",  name = "Blessing Blossom",    id = 210807, colors = { "black", "green" } },
 	{ key = "briarthorn_2450",         name = "Briarthorn",          id = 2450, colors = { "brown" } },
-	{ key = "bruiseweed_2453",         name = "Bruiseweed",          id = 2453, colors = { "blue" } },
+	{ key = "bruiseweed_2453",         name = "Bruiseweed",          id = 2453, colors = { "green" } },
 	{ key = "bubblepoppy_191467",      name = "Bubble Poppy",        id = 191467, colors = { "blue", "green" } },
 	{ key = "bubblepoppy_191468",      name = "Bubble Poppy",        id = 191468, colors = { "blue", "green" } },
 	{ key = "bubblepoppy_191469",      name = "Bubble Poppy",        id = 191469, colors = { "blue", "green" } },
@@ -258,21 +296,21 @@ ns.HERBS = {
 	{ key = "greentealeaf_72234",      name = "Green Tea Leaf",      id = 72234, colors = { "green", "yellow" } },
 	{ key = "icethorn_36906",          name = "Icethorn",            id = 36906, colors = { "blue", "white" } },
 	{ key = "kingsblood_3356",         name = "Kingsblood",          id = 3356, colors = { "purple" } },
-	{ key = "lichbloom_36905",         name = "Lichbloom",           id = 36905, colors = { "black", "blue" } },
+	{ key = "lichbloom_36905",         name = "Lichbloom",           id = 36905, colors = { "black" } },
 	{ key = "luredrop_210799",         name = "Luredrop",            id = 210799, colors = { "blue", "orange" } },
 	{ key = "luredrop_210800",         name = "Luredrop",            id = 210800, colors = { "blue", "orange" } },
 	{ key = "luredrop_210801",         name = "Luredrop",            id = 210801, colors = { "blue", "orange" } },
 	{ key = "mageroyal_785",           name = "Mageroyal",           id = 785, colors = { "red" } },
 	{ key = "manalily_236778",         name = "Mana Lily",           id = 236778, colors = { "red", "yellow" } },
 	{ key = "manalily_236779",         name = "Mana Lily",           id = 236779, colors = { "red", "yellow" } },
-	{ key = "marrowroot_168589",       name = "Marrowroot",          id = 168589, colors = { "brown", "blue" } },
+	{ key = "marrowroot_168589",       name = "Marrowroot",          id = 168589, colors = { "brown" } },
 	{ key = "mycobloom_210796",        name = "Mycobloom",           id = 210796, colors = { "brown", "white" } },
 	{ key = "mycobloom_210797",        name = "Mycobloom",           id = 210797, colors = { "brown", "white" } },
 	{ key = "mycobloom_210798",        name = "Mycobloom",           id = 210798, colors = { "brown", "white" } },
 	{ key = "nagrandarrowbloom_109128", name = "Nagrand Arrowbloom",  id = 109128, colors = { "black", "green" } },
-	{ key = "orbinid_210802",          name = "Orbinid",             id = 210802, colors = { "purple", "blue" } },
-	{ key = "orbinid_210803",          name = "Orbinid",             id = 210803, colors = { "purple", "blue" } },
-	{ key = "orbinid_210804",          name = "Orbinid",             id = 210804, colors = { "purple", "blue" } },
+	{ key = "orbinid_210802",          name = "Orbinid",             id = 210802, colors = { "purple" } },
+	{ key = "orbinid_210803",          name = "Orbinid",             id = 210803, colors = { "purple" } },
+	{ key = "orbinid_210804",          name = "Orbinid",             id = 210804, colors = { "purple" } },
 	{ key = "peacebloom_2447",         name = "Peacebloom",          id = 2447, colors = { "white" } },
 	{ key = "risingglory_168586",      name = "Rising Glory",        id = 168586, colors = { "white", "yellow" } },
 	{ key = "riverbud_152505",         name = "Riverbud",            id = 152505, colors = { "black", "green" } },
@@ -290,7 +328,7 @@ ns.HERBS = {
 	{ key = "writhebark_191470",       name = "Writhebark",          id = 191470, colors = { "black", "brown", "orange" } },
 	{ key = "writhebark_191471",       name = "Writhebark",          id = 191471, colors = { "black", "brown", "orange" } },
 	{ key = "writhebark_191472",       name = "Writhebark",          id = 191472, colors = { "black", "brown", "orange" } },
-	{ key = "yserallineseed_128304",   name = "Yseralline Seed",     id = 128304, colors = { "black", "blue" } },
+	{ key = "yserallineseed_128304",   name = "Yseralline Seed",     id = 128304, colors = { "black" } },
 	{ key = "herb_109125", name = "Fireweed", id = 109125, colors = { "orange", "red" } },
 	{ key = "herb_109127", name = "Starflower", id = 109127, colors = { "blue" } },
 	{ key = "herb_109129", name = "Talador Orchid", id = 109129, colors = { "purple", "white" } },
@@ -298,19 +336,19 @@ ns.HERBS = {
 	{ key = "herb_151565", name = "Astral Glory", id = 151565, colors = { "red" } },
 	{ key = "herb_152506", name = "Star Moss", id = 152506, colors = { "red" } },
 	{ key = "herb_152508", name = "Winter's Kiss", id = 152508, colors = { "white" } },
-	{ key = "herb_152509", name = "Siren's Pollen", id = 152509, colors = { "orange", "blue" } },
+	{ key = "herb_152509", name = "Siren's Pollen", id = 152509, colors = { "orange" } },
 	{ key = "herb_168487", name = "Zin'anthid", id = 168487, colors = { "purple" } },
 	{ key = "herb_168583", name = "Widowbloom", id = 168583, colors = { "orange", "red" } },
 	{ key = "herb_170554", name = "Vigil's Torch", id = 170554, colors = { "green", "purple" } },
-	{ key = "herb_191460", name = "Hochenblume", id = 191460, colors = { "purple", "blue" } },
-	{ key = "herb_191461", name = "Hochenblume", id = 191461, colors = { "purple", "blue" } },
-	{ key = "herb_191462", name = "Hochenblume", id = 191462, colors = { "purple", "blue" } },
+	{ key = "herb_191460", name = "Hochenblume", id = 191460, colors = { "purple" } },
+	{ key = "herb_191461", name = "Hochenblume", id = 191461, colors = { "purple" } },
+	{ key = "herb_191462", name = "Hochenblume", id = 191462, colors = { "purple" } },
 	{ key = "herb_22787", name = "Ragveil", id = 22787, colors = { "white" } },
 	{ key = "herb_22791", name = "Netherbloom", id = 22791, colors = { "red" } },
 	{ key = "herb_22792", name = "Nightmare Vine", id = 22792, colors = { "orange" } },
 	{ key = "herb_22793", name = "Mana Thistle", id = 22793, colors = { "purple" } },
-	{ key = "herb_236761", name = "Tranquility Bloom", id = 236761, colors = { "blue", "white" } },
-	{ key = "herb_236767", name = "Tranquility Bloom", id = 236767, colors = { "blue", "white" } },
+	{ key = "herb_236761", name = "Tranquility Bloom", id = 236761, colors = { "white" } },
+	{ key = "herb_236767", name = "Tranquility Bloom", id = 236767, colors = { "white" } },
 	{ key = "herb_236770", name = "Sanguithorn", id = 236770, colors = { "green", "orange" } },
 	{ key = "herb_236771", name = "Sanguithorn", id = 236771, colors = { "green", "orange" } },
 	{ key = "herb_36904", name = "Tiger Lily", id = 36904, colors = { "red" } },

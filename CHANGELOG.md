@@ -17,6 +17,12 @@ addon is rebuilt to match, which is why this is a 2.0.
   what the window counts and what goals are set against.
 - **Teal is gone.** Blizzard retired the category. Its shades moved to blue or
   green, and a teal goal moves with them.
+- **Eight color names sit under a different dye than they used to.** Every one of
+  the 77 names is now read from the game, and eight of them turned out to have
+  been filed wrong — some since long before this patch. Pinewood, Ironclaw and
+  Vol'dun Taupe are green; Stormsteel is blue; Dusk Lily Grey is purple; Holy Oak
+  Tan is white; Dark Gold is yellow; Klaxxi Amber is orange. If you had a goal
+  against one of those, it now counts toward the dye it actually costs.
 - **Two tabs again, for two different questions.** By Color is the nine dyes you
   stock — what you have, what your flowers would make, what you still need. By Dye
   is the 77 color names, which is where the numbers get typed.
@@ -62,20 +68,30 @@ addon is rebuilt to match, which is why this is a 2.0.
   recipe, and a green check on the cheapest flower to make that color out of. Ten
   of one flower makes a dye and a color has up to fifteen to choose from, so that
   last one is the only part of the decision the window doesn't help with.
+- **The flowers each color is made from are read from the station too.** Standing
+  at a Dye Station, the addon reads its nine recipes and takes the flower list
+  straight off them, along with how many flowers one dye costs. It's remembered,
+  so the numbers are still right when you're nowhere near a station. Blizzard
+  moving a flower between colors now fixes itself on your next visit instead of
+  waiting for an update from me — and the last hand-maintained table in the addon
+  stops being one.
 - **Window opacity is adjustable** in the options. It starts exactly where it
   always was; drag it down if you'd rather see the house through it.
 
 ### Fixed
 
+- **Blue was counting flowers it can't use.** The herbs each color is made from
+  were carried over from the old pigment recipes, and every herb that used to make
+  teal was folded into blue on the reasoning that the teal pigment became Blue
+  Housing Dye. It doesn't work that way: those herbs dropped teal and kept the
+  color they already had — Lichbloom is black, Hochenblume purple, Marrowroot
+  brown. Thirteen of them, all sitting in blue, so blue showed 31 flowers where
+  it has 18 and Makeable offered blue dyes you couldn't actually make. Bruiseweed
+  was teal only, so the fold sent it to blue; it's green. Every other color was
+  right.
 - **`/dye hidezero` actually hides things now.** It set a flag, said it had
   worked, and filtered nothing. Colors you've set a goal for still show — hiding
   what you have none of shouldn't hide the ones you still need to make.
-
-### Known gaps
-
-- The herbs each color is made from are carried over from the old pigment recipes,
-  with the retired teal ones folded into blue. That mapping hasn't been re-checked
-  against 12.1 yet.
 
 ## [1.3.0] — 2026-08-04
 

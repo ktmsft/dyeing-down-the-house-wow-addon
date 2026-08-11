@@ -101,9 +101,15 @@ C_Item = {
 	GetItemIconByID = function() return 12345 end,
 }
 
--- Fake profession API. 12.1 removed the dye recipes from the crafting book
--- entirely, so nothing in the addon reads these any more -- they're left as a stub
--- purely so a stray call can't nil-index during a load.
+-- Fake profession API, in the shape 12.1's Dye Station actually has.
+--
+-- The dye recipes are SALVAGE recipes -- the Milling shape, one slot that accepts
+-- any of fifteen flowers -- so their schematics carry NO reagents and the flower
+-- list comes from GetSalvagableItemIDs instead. That difference is the whole
+-- reason the first version of the herb reader came back empty against a live
+-- client, so the stub reproduces it rather than the tidier shape I assumed.
+--
+-- Overwritten wholesale by the discovery fixtures near the end of the file.
 C_TradeSkillUI = {
 	GetBaseProfessionInfo = function() return { professionName = "Inscription" } end,
 	GetAllRecipeIDs = function() return { 5001, 5002 } end,
@@ -113,21 +119,21 @@ C_TradeSkillUI = {
 	GetRecipeSchematic = function(rid)
 		if rid == 5001 then
 			return {
-				recipeID = 5001, name = "Red Dye Pigment",
-				outputItemID = 900201, quantityMin = 1, quantityMax = 1,
-				reagentSlotSchematics = {
-					{ reagents = { { itemID = 900101 } }, quantityRequired = 10, reagentType = 1 },
-				},
+				recipeID = 5001, name = "Red Housing Dye", isSalvageRecipe = true,
+				outputItemID = 900001, quantityMin = 1, quantityMax = 1,
+				reagentSlotSchematics = { { reagents = {}, quantityRequired = 10 } },
 			}
 		else
 			return {
 				recipeID = 5002, name = "unused",
-				outputItemID = 900001, quantityMin = 1, quantityMax = 1,
-				reagentSlotSchematics = {
-					{ reagents = { { itemID = 900201 } }, quantityRequired = 1, reagentType = 1 },
-				},
+				outputItemID = 900999, quantityMin = 1, quantityMax = 1,
+				reagentSlotSchematics = {},
 			}
 		end
+	end,
+	GetSalvagableItemIDs = function(rid)
+		if rid == 5001 then return { 900101, 900102 } end
+		return {}
 	end,
 }
 
@@ -279,13 +285,34 @@ do
 	local colorsCovered = 0
 	for _, c in ipairs(ns.COLORS) do if colorHasHerb[c] then colorsCovered = colorsCovered + 1 end end
 	check("all 9 colors have herbs", colorsCovered, 9)
-	-- Shades whose family is inferred rather than read from the game. This number is
-	-- a REMINDER, not a rule: it should fall to 0 as the PTR confirms each one, and
-	-- the test failing when it does is the point -- it forces the count to be
-	-- updated deliberately rather than drifting.
+	-- Shades whose family is inferred rather than read from the game. This was 9, and
+	-- was written as a reminder that should fall to 0 as the PTR confirmed each one.
+	-- It has: all 77 were read from C_DyeColor on 12.1 (10 Aug 2026).
+	--
+	-- It stays as a rule now rather than a reminder. Anything added to Data.lua by
+	-- hand from here has to be read from the game first, and a `guess = true` landing
+	-- in the file fails the suite instead of quietly shipping.
 	local guessed = 0
 	for _, sh in ipairs(ns.SHADES) do if sh.guess then guessed = guessed + 1 end end
-	check("shades still awaiting confirmation", guessed, 9)
+	check("no shade family is still a guess", guessed, 0)
+
+	-- The eight that moved when the game was finally asked. Seven of them were never
+	-- flagged as guesses -- they came off the old pigments and were wrong anyway --
+	-- so they are pinned here by name. A silent revert to the old placement is
+	-- exactly the kind of regression a reordering of this table could cause.
+	local shadeColor = {}
+	for _, sh in ipairs(ns.SHADES) do shadeColor[sh.name] = sh.color end
+	local corrected = {
+		["Ironclaw"] = "green", ["Stormsteel"] = "blue",
+		["Dusk Lily Grey"] = "purple", ["Dark Gold"] = "yellow",
+		["Vol'dun Taupe"] = "green", ["Holy Oak Tan"] = "white",
+		["Pinewood"] = "green", ["Klaxxi Amber"] = "orange",
+	}
+	local wrong = 0
+	for name, color in pairs(corrected) do
+		if shadeColor[name] ~= color then wrong = wrong + 1 end
+	end
+	check("the shades the game moved stay moved", wrong, 0)
 end
 
 -- Core must be self-sufficient without the UI layer: UI.lua / Options.lua load
@@ -1668,6 +1695,144 @@ C_DyeColor = {
 }
 check("a throwing per-colour call is survivable", (pcall(ns.DiscoverDyes)), true)
 C_DyeColor = nil
+
+--------------------------------------------------------------------------------
+-- Discovery: reading the herb -> colour map off the Dye Station
+--
+-- The last table in the addon that was carried over rather than read, and the one
+-- with teeth: Makeable, Cost and "flowers still short" are all summed over a
+-- colour's herb list, so a herb the station won't accept for a colour is an
+-- OVERCOUNT -- the window claiming dyes that cannot be made. On the live 12.1 PTR
+-- this found blue carrying 31 flowers against a real 18.
+--
+-- What's guarded here is the asymmetry that makes it safe to run against someone's
+-- live data: the station may REPLACE a colour's list, removals included, but only
+-- for a colour it actually spoke about. Silence must change nothing.
+--------------------------------------------------------------------------------
+
+print("\n-- Discovery from the Dye Station --")
+
+ns.COLORS = { "red", "blue", "green" }
+ns.DYES = {
+	{ key = "red",   name = "Red Housing Dye",   id = 700001, color = "red" },
+	{ key = "blue",  name = "Blue Housing Dye",  id = 700002, color = "blue" },
+	{ key = "green", name = "Green Housing Dye", id = 700003, color = "green" },
+}
+ns.SHADES = {}
+-- The pre-12.1 shape, teal already folded into blue: Bruiseweed is blue-only and
+-- Lichbloom carries blue alongside black. Both are wrong, and only the station
+-- can say so.
+ns.HERBS = {
+	{ key = "bruiseweed",  name = "Bruiseweed",  id = 700101, colors = { "blue" } },
+	{ key = "lichbloom",   name = "Lichbloom",   id = 700102, colors = { "black", "blue" } },
+	{ key = "silverleaf",  name = "Silverleaf",  id = 700103, colors = { "blue" } },
+	{ key = "mageroyal",   name = "Mageroyal",   id = 700104, colors = { "red" } },
+}
+ns.RebuildLookups()
+ITEM_NAMES[700201] = "Ula'tek Bloom"
+
+-- A salvage station: no reagents on the schematic, flowers behind the salvage
+-- list. Blue loses two herbs, green gains one it never had, and red is not
+-- mentioned at all.
+local salvage = {
+	[6001] = { color = 700002, ids = { 700103 } },              -- blue: bruiseweed and lichbloom gone
+	[6002] = { color = 700003, ids = { 700101, 700201 } },      -- green: bruiseweed, plus a herb we've never seen
+}
+C_TradeSkillUI = {
+	GetAllRecipeIDs = function() return { 6001, 6002 } end,
+	GetRecipeSchematic = function(rid)
+		local row = salvage[rid]
+		if not row then return nil end
+		return {
+			recipeID = rid, isSalvageRecipe = true, outputItemID = row.color,
+			reagentSlotSchematics = { { reagents = {}, quantityRequired = 12 } },
+		}
+	end,
+	GetSalvagableItemIDs = function(rid)
+		return salvage[rid] and salvage[rid].ids or {}
+	end,
+}
+
+local hok, hstats = ns.LearnHerbsFromStation()
+check("the station was read", hok, true)
+check("both recipes yielded flowers", hstats.recipes, 2)
+check("...via the salvage list, not the reagents", hstats.colors, 2)
+
+print("\n-- A colour the station spoke about is REPLACED, removals included --")
+local function herbColors(key)
+	local herb = ns.byKey[key]
+	return table.concat(herb and herb.colors or {}, ",")
+end
+check("a herb the station dropped loses that colour", herbColors("bruiseweed"), "green")
+check("...and keeps the colours it still has", herbColors("lichbloom"), "black")
+check("a herb the station kept is untouched", herbColors("silverleaf"), "blue")
+check("blue is down to what the station said", #ns.herbsByColor.blue, 1)
+check("green is up to what the station said", #ns.herbsByColor.green, 2)
+
+print("\n-- A colour the station said NOTHING about is left alone --")
+check("red still has its flower", herbColors("mageroyal"), "red")
+check("...and its list is intact", #ns.herbsByColor.red, 1)
+
+print("\n-- A flower Data.lua never heard of is absorbed --")
+check("it joins the herb table", ns.byID[700201] ~= nil, true)
+check("...on the colour that listed it", herbColors("herb_700201"), "green")
+check("...and is named from the client", ns.byID[700201].name, "Ula'tek Bloom")
+check("...counting as a herb, not a dye", ns.byID[700201].kind, "herb")
+
+print("\n-- Flowers per dye comes off the recipe, not the assumption --")
+check("read from quantityRequired", ns.HERBS_PER_DYE, 12)
+check("...and reported", hstats.perDye, 12)
+
+print("\n-- It is cached, so Makeable is right away from the station --")
+check("blue was written to the profile", #DyeingDownTheHouseDB.learnedHerbs.blue.ids, 1)
+check("a colour never read is not invented", DyeingDownTheHouseDB.learnedHerbs.red, nil)
+check("the quantity is stored too", DyeingDownTheHouseDB.learnedHerbsPerDye, 12)
+
+-- Wind the tables back to the shipped shape and re-apply from the cache alone,
+-- which is exactly what login does.
+ns.HERBS = {
+	{ key = "bruiseweed",  name = "Bruiseweed",  id = 700101, colors = { "blue" } },
+	{ key = "lichbloom",   name = "Lichbloom",   id = 700102, colors = { "black", "blue" } },
+	{ key = "silverleaf",  name = "Silverleaf",  id = 700103, colors = { "blue" } },
+	{ key = "mageroyal",   name = "Mageroyal",   id = 700104, colors = { "red" } },
+}
+ns.HERBS_PER_DYE = 10
+ns.RebuildLookups()
+ns.ApplyLearnedHerbs()
+check("the cache reproduces the correction", herbColors("bruiseweed"), "green")
+check("...including the removals", herbColors("lichbloom"), "black")
+check("...and the quantity", ns.HERBS_PER_DYE, 12)
+check("a colour never read still stands on Data.lua", herbColors("mageroyal"), "red")
+
+print("\n-- Silence never blanks a colour --")
+-- An ordinary profession window: recipes, but none of them a dye.
+C_TradeSkillUI.GetAllRecipeIDs = function() return { 6003 } end
+C_TradeSkillUI.GetRecipeSchematic = function()
+	return { recipeID = 6003, outputItemID = 999999, reagentSlotSchematics = {} }
+end
+local sok2, sreason = ns.LearnHerbsFromStation()
+check("it declines", sok2, false)
+check("...and says why", type(sreason), "string")
+check("blue is untouched", #ns.herbsByColor.blue, 1)
+check("green is untouched", #ns.herbsByColor.green, 2)
+
+-- And an empty salvage list for a colour it DOES recognise: still not an answer.
+C_TradeSkillUI.GetAllRecipeIDs = function() return { 6004 } end
+C_TradeSkillUI.GetRecipeSchematic = function()
+	return { recipeID = 6004, isSalvageRecipe = true, outputItemID = 700002,
+		reagentSlotSchematics = {} }
+end
+C_TradeSkillUI.GetSalvagableItemIDs = function() return {} end
+ns.LearnHerbsFromStation()
+check("an empty flower list does not empty the colour", #ns.herbsByColor.blue, 1)
+
+print("\n-- A client with no salvage API is not a failure --")
+C_TradeSkillUI.GetSalvagableItemIDs = nil
+check("it survives the function being gone", (pcall(ns.LearnHerbsFromStation)), true)
+check("...leaving the map as it was", #ns.herbsByColor.blue, 1)
+C_TradeSkillUI = nil
+local nok2 = ns.LearnHerbsFromStation()
+check("no C_TradeSkillUI at all is survivable", nok2, false)
 
 print(("\n%d checks, %d failures"):format(checks, failures))
 os.exit(failures == 0 and 0 or 1)
