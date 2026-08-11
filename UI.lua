@@ -580,6 +580,11 @@ local function CellValue(key, dye, rc)
 end
 
 function ns.Refresh()
+	-- Keep the dye station's markers in sync even when our window is hidden or
+	-- closed: a goal changed anywhere has to reach the station list, and this is
+	-- the only thing that calls it. Dropping this line when Refresh was rewritten
+	-- is why changing a goal stopped updating the station.
+	if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end
 	if not frame or not frame:IsShown() then return end
 	-- Collapsed to the title bar: don't touch the list (it re-shows the scroll frame,
 	-- which would spill the rows out below the short bar on any bag/loot refresh).

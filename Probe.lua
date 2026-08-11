@@ -991,6 +991,14 @@ local function ProbeStation()
 	end
 	W("")
 
+	W("-- did Crafting.lua manage to attach? --")
+	W("  ns.craftingHooked: %s", tostring(ns.craftingHooked))
+	W("  (false with the window open means the paths above are wrong; true with")
+	W("   nothing on screen means there is simply nothing to mark -- a recipe is")
+	W("   only flagged when you have set a GOAL for that colour and hold fewer,")
+	W("   and the reagent checks need flower prices, so run a scan first.)")
+	W("")
+
 	W("-- is Blizzard_Professions even loaded? --")
 	if C_AddOns and C_AddOns.IsAddOnLoaded then
 		W("  Blizzard_Professions: %s",

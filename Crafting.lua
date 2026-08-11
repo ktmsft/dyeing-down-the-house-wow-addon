@@ -238,6 +238,11 @@ end
 -- window is open (ns.Refresh calls it). No-op until the window has been hooked.
 ns.RefreshCraftingMarkers = function() end
 
+-- Exposed so `/dye probe station` can report whether this ever managed to attach.
+-- "I hooked nothing" and "I hooked it and there is nothing to mark" look identical
+-- from the outside, and they need completely different fixes.
+ns.craftingHooked = false
+
 local hooked = false
 local function Hook()
 	if hooked then return end
@@ -257,6 +262,7 @@ local function Hook()
 	end
 	-- Our own refresh (goal/count changes) updates both the list and the detail.
 	ns.RefreshCraftingMarkers = function() DecorateList(); DecorateDetail() end
+	ns.craftingHooked = true
 	DecorateList()
 	DecorateDetail()
 
@@ -269,16 +275,41 @@ local function Hook()
 	end
 end
 
+-- Attaching is RETRIED, because the addon loading and its frames existing are two
+-- different moments. ADDON_LOADED fires when the file has run, which can be before
+-- CraftingPage.RecipeList.ScrollBox has been built -- and the old version gave up
+-- permanently at that point, leaving `hooked` false with nothing left to try again.
+-- A window that loads a fraction early would silently never be decorated.
+--
+-- Bounded, so a client where this frame genuinely doesn't exist stops asking.
+local MAX_ATTEMPTS = 20
+local attempts = 0
+
+local function TryHook()
+	if hooked then return end
+	attempts = attempts + 1
+	pcall(Hook)
+	if not hooked and attempts < MAX_ATTEMPTS then
+		C_Timer.After(0.5, TryHook)
+	end
+end
+
 local waiter = CreateFrame("Frame")
 waiter:RegisterEvent("ADDON_LOADED")
-waiter:SetScript("OnEvent", function(_, _, name)
-	if name == "Blizzard_Professions" then
-		pcall(Hook)
-		waiter:UnregisterEvent("ADDON_LOADED")
+waiter:RegisterEvent("PLAYER_ENTERING_WORLD")
+waiter:SetScript("OnEvent", function(_, event, name)
+	if hooked then return end
+	if event == "PLAYER_ENTERING_WORLD" then
+		TryHook()
+	elseif type(name) == "string" and name:lower():find("profession", 1, true) then
+		-- Any professions addon, not just the one name. The station's window is
+		-- Blizzard_Professions today; being narrower than that buys nothing.
+		attempts = 0
+		TryHook()
 	end
 end)
 
--- Already loaded (e.g. /reload with the window open)? Hook straight away.
+-- Already loaded (e.g. /reload with the window open)? Attach straight away.
 if C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("Blizzard_Professions") then
-	pcall(Hook)
+	TryHook()
 end
