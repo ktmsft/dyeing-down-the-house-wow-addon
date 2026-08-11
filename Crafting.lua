@@ -110,7 +110,12 @@ local function CurrentRecipeDye()
 	return DyeFromRecipeInfo(ri), sf
 end
 
--- A "have X / need Y" line under the recipe title.
+-- Two lines under the recipe title: how you're doing, and which flower to use.
+--
+-- The "use this one" line is the point of the file. The reagent picker's green
+-- check only answers once flower prices exist, and a fresh install or an empty
+-- realm auction house has none -- so the recommendation lives here too, where it
+-- can fall back on what's in your bags. See ns.SuggestFlower.
 local function DecorateDetail()
 	local dye, sf = CurrentRecipeDye()
 	if not sf then return end
@@ -123,10 +128,15 @@ local function DecorateDetail()
 			fs:SetPoint("TOPLEFT", sf, "TOPLEFT", 60, -46)
 		end
 		sf.ddthHaveNeed = fs
-	end
-	local fs = sf.ddthHaveNeed
 
-	if not dye then fs:Hide(); return end
+		local use = sf:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		use:SetPoint("TOPLEFT", fs, "BOTTOMLEFT", 0, -4)
+		use:SetJustifyH("LEFT")
+		sf.ddthUseFlower = use
+	end
+	local fs, use = sf.ddthHaveNeed, sf.ddthUseFlower
+
+	if not dye then fs:Hide(); use:Hide(); return end
 
 	local have, goal = ns.GetTotal(dye.key), ns.GetGoal(dye.key)
 	if goal > 0 then
@@ -137,6 +147,32 @@ local function DecorateDetail()
 		fs:SetTextColor(0.8, 0.8, 0.8)
 	end
 	fs:Show()
+
+	local pick = ns.SuggestFlower and ns.SuggestFlower(dye.color)
+	if not pick then
+		use:Hide()
+	else
+		if pick.reason == "held" then
+			-- You already own enough. Say how many it makes, because that is the
+			-- number that decides whether you're done or still shopping.
+			use:SetText(("Use |cffffd100%s|r — %d held, makes %d")
+				:format(pick.name, pick.have, pick.dyes))
+			use:SetTextColor(0.55, 0.85, 0.55)
+		elseif pick.reason == "cheap" then
+			use:SetText(("Cheapest: |cffffd100%s|r — %s for one dye")
+				:format(pick.name, GetCoinTextureString and GetCoinTextureString(pick.cost)
+					or (math.floor(pick.cost / 10000) .. "g")))
+			use:SetTextColor(0.8, 0.8, 0.8)
+		else
+			-- Nothing held in quantity and nothing priced. Still better than silence:
+			-- name the one they're closest on and how far off it is.
+			local short = math.max(0, ns.HERBS_PER_DYE - pick.have)
+			use:SetText(("Closest: |cffffd100%s|r — %d held, %d more for one dye")
+				:format(pick.name, pick.have, short))
+			use:SetTextColor(0.95, 0.7, 0.4)
+		end
+		use:Show()
+	end
 end
 
 --------------------------------------------------------------------------------

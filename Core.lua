@@ -1334,6 +1334,52 @@ function ns.GetCraftBreakdown(dyeKey)
 	}
 end
 
+-- Which flower to actually use for this color, and why.
+--
+-- The reagent picker's green check answers this only once flower PRICES exist, and
+-- there are two ordinary situations where they don't: a fresh install that hasn't
+-- scanned, and a realm whose auction house is empty. In both, the addon knew
+-- perfectly well what to recommend and said nothing — the flowers in your bags are
+-- a fact, and no market is needed to read them.
+--
+-- So it answers in three tiers, best first:
+--   held    a flower you already have ten or more of. Nothing to buy, and the most
+--           of it wins, so you spend down the biggest pile first.
+--   cheap   nothing held in quantity, but flowers are priced: the cheapest to buy.
+--   short   nothing held and nothing priced: whichever you have most of, so the
+--           answer is "keep picking this one" rather than a blank.
+--
+-- Returns nil only when the color has no flowers at all.
+function ns.SuggestFlower(color)
+	local perDye = ns.HERBS_PER_DYE
+	local hiddenHerbs = DyeingDownTheHouseDB.ui.hiddenHerbs or {}
+
+	local held, cheap, most
+	for _, herb in ipairs(ns.herbsByColor[color] or {}) do
+		if not (herb.name and hiddenHerbs[herb.name:lower()]) then
+			local have = ns.GetTotal(herb.key)
+			local price = ns.GetPrice(herb.key)
+			local entry = {
+				key = herb.key,
+				name = herb.name or ("Item " .. tostring(herb.id)),
+				id = herb.id,
+				have = have,
+				dyes = math.floor(have / perDye),
+				price = price,
+				cost = price and price * perDye or nil,
+			}
+			if entry.dyes > 0 and (not held or entry.have > held.have) then held = entry end
+			if entry.cost and (not cheap or entry.cost < cheap.cost) then cheap = entry end
+			if not most or entry.have > most.have then most = entry end
+		end
+	end
+
+	if held then held.reason = "held"; return held end
+	if cheap then cheap.reason = "cheap"; return cheap end
+	if most then most.reason = "short"; return most end
+	return nil
+end
+
 -- What one of this dye costs to make, in copper: 10 × the cheapest flower of its
 -- color. nil when none of that color's flowers has been priced yet. This is what
 -- the Cost column and the price sort read, and it's the closest thing a dye still

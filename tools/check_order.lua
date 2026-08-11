@@ -53,6 +53,7 @@ local KNOWN_GLOBALS = {
 	Enum = true, Constants = true,
 	-- hooks and misc
 	SlashCmdList = true, RunTimers = true, hooksecurefunc = true,
+	GetCoinTextureString = true,
 	OpenProfessionsItemFlyout = true, ProfessionsFrame = true,
 }
 

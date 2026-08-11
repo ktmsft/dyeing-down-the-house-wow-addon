@@ -602,6 +602,56 @@ local last = cb.flowers[#cb.flowers]
 check("unscanned flower has no craft cost", last.craftCost, nil)
 check("unscanned flower verdict is nil", last.isCheapest, nil)
 
+print("\n-- Which flower to actually use --")
+-- The station's advice has to work with NO prices at all: a fresh install hasn't
+-- scanned, and an empty realm auction house never will. What is in the bags is a
+-- fact either way, so the recommendation is graded rather than withheld.
+ns.SetPrice("rose", nil); ns.SetPrice("poppy", nil)
+-- Holdings: rose 25, poppy 4. Only rose reaches ten.
+local pick = ns.SuggestFlower("red")
+check("recommends a flower with no prices at all", pick ~= nil, true)
+check("picks the one there is enough of", pick.name, "Rose")
+check("...and says why", pick.reason, "held")
+check("...and how many it makes", pick.dyes, 2)
+
+print("\n-- Most held wins, so the biggest pile goes first --")
+BAGS[4] = { [1] = { 900102, 60 } } -- 60 poppy, beating rose's 25
+Fire("BAG_UPDATE_DELAYED"); RunTimers()
+check("the bigger pile is recommended", ns.SuggestFlower("red").name, "Poppy")
+BAGS[4] = nil
+Fire("BAG_UPDATE_DELAYED"); RunTimers()
+
+print("\n-- Nothing held in quantity: fall back to cheapest priced --")
+-- Drop iris below ten so neither blue flower qualifies on holdings.
+BAGS[2] = { [1] = { 900103, 5 } }
+Fire("BAG_UPDATE_DELAYED"); RunTimers()
+ns.SetPrice("poppy", 900)
+ns.SetPrice("iris", 100)
+local cheap = ns.SuggestFlower("blue")
+check("falls back to the cheapest to buy", cheap.name, "Iris")
+check("...and says so", cheap.reason, "cheap")
+check("...with the cost of one dye", cheap.cost, 1000)
+
+print("\n-- Nothing held, nothing priced: name the closest anyway --")
+ns.SetPrice("poppy", nil); ns.SetPrice("iris", nil)
+local short = ns.SuggestFlower("blue")
+check("still answers rather than going blank", short ~= nil, true)
+check("names the one you have most of", short.name, "Iris")
+check("...flagged as short", short.reason, "short")
+
+print("\n-- A color with no flowers has nothing to suggest --")
+check("nil rather than a made-up answer", ns.SuggestFlower("green"), nil)
+
+print("\n-- Hidden flowers are never recommended --")
+ns.SetHerbHidden("Iris", true)
+check("a hidden flower is skipped", ns.SuggestFlower("blue").name, "Poppy")
+ns.SetHerbHidden("Iris", false)
+BAGS[2] = { [1] = { 900103, 100 } }
+Fire("BAG_UPDATE_DELAYED"); RunTimers()
+-- Put back the prices the sections below were written against.
+ns.SetPrice("rose", 400); ns.SetPrice("poppy", 600)
+ns.SetPrice("iris", nil)
+
 print("\n-- GetCraftCost is what the Cost column reads --")
 check("red costs 10 x its cheapest flower", ns.GetCraftCost("red"), 4000)
 check("a color with no priced flower has no cost", ns.GetCraftCost("green"), nil)
