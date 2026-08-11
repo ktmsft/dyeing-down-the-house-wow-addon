@@ -96,12 +96,26 @@ local function FirstField(info, fields)
 end
 
 -- Pull identity out of one info table, whatever it happens to be called.
+--
+-- `dyeColorID` is read as a third route to the answer. An unpainted slot reports
+-- it as 0 and carries no name at all — 12.1's dyeSlotInfo is IDs and nothing else
+-- ({ ID, channel, dyeColorCategoryID, dyeColorID, orderIndex }) — so a slot only
+-- becomes readable by name once a dye is actually on it. The ID works either way,
+-- once ns.SHADE_BY_COLORID knows what the numbers mean.
+--
+-- dyeColorCategoryID is deliberately NOT read here. It is not known to be one of
+-- the nine families: a rug reports category 3 on slot 1 while the swatch grid
+-- offers that slot every colour in the game, so it is much more likely to be a
+-- material category. Wiring goals to it on a guess would put every count in the
+-- addon against the wrong colour.
 local function ReadInfo(info)
 	if type(info) ~= "table" then return nil end
 	local itemID = FirstField(info, ID_FIELDS)
 	local name = FirstField(info, NAME_FIELDS)
-	if itemID == nil and name == nil then return nil end
-	return itemID, FirstField(info, OWNED_FIELDS), name
+	local colorID = FirstField(info, { "dyeColorID" })
+	if colorID == 0 then colorID = nil end -- 0 means "nothing applied"
+	if itemID == nil and name == nil and colorID == nil then return nil end
+	return itemID, FirstField(info, OWNED_FIELDS), name, colorID
 end
 
 -- The dye currently selected: item id, owned count, name.
@@ -117,7 +131,7 @@ end
 -- and both are tried, because the keyed one is the field most likely to be renamed
 -- next and the children are structural.
 local function CurrentDye(pane)
-	local ok, itemID, numOwned, name = pcall(function()
+	local ok, itemID, numOwned, name, colorID = pcall(function()
 		local slots = {}
 
 		local byChannel = pane.dyeSlotFramesByChannel or pane.dyeSlotFrames
@@ -136,13 +150,13 @@ local function CurrentDye(pane)
 			-- depending on whether the slot has been painted yet.
 			local swatch = slot.CurrentSwatch or slot.Swatch
 			for _, info in ipairs({
-				slot.dyeSlotInfo,
 				swatch and swatch.dyeColorInfo,
 				swatch and swatch.colorInfo,
+				slot.dyeSlotInfo,
 				swatch and swatch.dyeSlotInfo,
 			}) do
-				local id, owned, nm = ReadInfo(info)
-				if id ~= nil or nm ~= nil then return id, owned, nm end
+				local id, owned, nm, cid = ReadInfo(info)
+				if id ~= nil or nm ~= nil or cid ~= nil then return id, owned, nm, cid end
 			end
 		end
 
@@ -152,8 +166,8 @@ local function CurrentDye(pane)
 			local infos = pane:GetPreviewDyeInfos()
 			if type(infos) == "table" then
 				for _, info in pairs(infos) do
-					local id, owned, nm = ReadInfo(info)
-					if id ~= nil or nm ~= nil then return id, owned, nm end
+					local id, owned, nm, cid = ReadInfo(info)
+					if id ~= nil or nm ~= nil or cid ~= nil then return id, owned, nm, cid end
 				end
 			end
 		end
@@ -161,7 +175,7 @@ local function CurrentDye(pane)
 		return nil
 	end)
 	if not ok then return nil end
-	return itemID, numOwned, name
+	return itemID, numOwned, name, colorID
 end
 
 -- Which of the nine colors the panel is showing, from whatever it gave us.
@@ -171,9 +185,17 @@ end
 -- item, so it goes through ns.SHADES to reach the family. That fallback is what
 -- keeps this working before anyone has filled in Data.lua's item IDs, and it's why
 -- ns.SHADES carries every one of the 77 names rather than just the interesting ones.
-local function ColorFor(itemID, name)
+local function ColorFor(itemID, name, colorID)
 	local entry = itemID and ns.byID and ns.byID[itemID]
 	if entry and entry.kind == "dye" then return entry.color end
+
+	-- By the game's own shade record ID, once we know what the numbers mean. This
+	-- is the only route that works on a slot the panel hasn't named for us, which
+	-- 12.1's all-IDs dyeSlotInfo makes the common case.
+	if colorID and ns.SHADE_BY_COLORID then
+		local shade = ns.SHADE_BY_COLORID[colorID]
+		if shade and shade.color then return shade.color end
+	end
 
 	if type(name) == "string" then
 		local lower = name:lower()
@@ -243,8 +265,8 @@ local function UpdatePanel()
 	local shownOk, shown = pcall(pane.IsShown, pane)
 	if not (shownOk and shown) then if box then box:Hide() end return end
 
-	local itemID, numOwned, dyeName = CurrentDye(pane)
-	local color = ColorFor(itemID, dyeName)
+	local itemID, numOwned, dyeName, colorID = CurrentDye(pane)
+	local color = ColorFor(itemID, dyeName, colorID)
 	-- Only colors we actually track can carry a goal; anything else, stay hidden.
 	if not color then if box then box:Hide() end return end
 

@@ -36,6 +36,11 @@ local ADDON, ns = ...
 --            frames; this reads what's inside them. Use it when a section above
 --            says it found the frame but not the field -- a filtered dump can only
 --            show you the names you already guessed.
+--   api      the Enums and C_ namespaces behind the dye system. THIS IS THE ONE TO
+--            REACH FOR FIRST. Frame-scraping was only ever a way in because I
+--            didn't know a dyeColorCategoryID existed; now that categories are
+--            known to be a game concept, the API that serves them beats reading
+--            somebody's layout on every axis, and it needs no window open.
 --
 -- OPEN A DECOR'S DYE PANEL BEFORE RUNNING panel OR swatches. A load-on-demand
 -- frame that hasn't loaded doesn't exist to be found, and the probe cannot tell
@@ -814,6 +819,138 @@ local function ProbeItems()
 end
 
 --------------------------------------------------------------------------------
+-- Section: api — the Enums and C_ namespaces behind the dye system
+--
+-- This should have been the FIRST section, and the frame-scraping the fallback.
+--
+-- `dyeSlotInfo` turned out to be all IDs and no names — { ID, channel,
+-- dyeColorCategoryID, dyeColorID, orderIndex }. IDs mean records, records mean an
+-- API serves them, and an API means none of this has to be scraped off somebody's
+-- layout with a window open.
+--
+-- A note against over-reading `dyeColorCategoryID`: it is NOT known to be one of
+-- the nine dye families. On a Rectangular Elven Floor Rug, slot 1 reports category
+-- 3 and slot 2 category 1, while the swatch grid offers slot 1 the full rainbow —
+-- so it can't be constraining that slot to a colour family. Best guess is a
+-- material category (which part of the decor the slot tints). Worth settling here
+-- rather than assuming, because assuming it was the family would have wired every
+-- goal in the addon to the wrong number.
+--
+-- Enums are pure data and are dumped whole. Functions are only CALLED when their
+-- name begins with Get/Is/Are/Can/Has — Blizzard's own convention for a read — and
+-- every call is pcall'd with no arguments first, then with a small integer. A
+-- probe that fired setters would be worse than no probe.
+--------------------------------------------------------------------------------
+
+local READ_PREFIXES = { "^Get", "^Is", "^Are", "^Can", "^Has" }
+
+local function LooksLikeRead(name)
+	for _, pattern in ipairs(READ_PREFIXES) do
+		if name:find(pattern) then return true end
+	end
+	return false
+end
+
+local function Relevant(name)
+	local lower = name:lower()
+	return lower:find("dye", 1, true) or lower:find("hous", 1, true)
+		or lower:find("decor", 1, true)
+end
+
+local function ProbeApi()
+	W("== api ==")
+	W("The Enums and C_ namespaces behind the dye system. Needs no window open.")
+	W("")
+
+	-- Enums first: pure data, and the likeliest place the nine categories are named.
+	W("-- Enum tables mentioning dye, housing or decor --")
+	local enums = {}
+	pcall(function()
+		for name, tbl in pairs(_G.Enum or {}) do
+			if type(name) == "string" and type(tbl) == "table" and Relevant(name) then
+				enums[#enums + 1] = name
+			end
+		end
+	end)
+	table.sort(enums)
+	if #enums == 0 then
+		W("  none found")
+	end
+	for _, name in ipairs(enums) do
+		DumpValue("Enum." .. name, Get(_G.Enum, name), 1, 2)
+	end
+	W("")
+
+	-- Constants tables sometimes carry the same thing under another roof.
+	W("-- Constants tables mentioning dye or housing --")
+	local consts = {}
+	pcall(function()
+		for name, tbl in pairs(_G.Constants or {}) do
+			if type(name) == "string" and type(tbl) == "table" and Relevant(name) then
+				consts[#consts + 1] = name
+			end
+		end
+	end)
+	table.sort(consts)
+	if #consts == 0 then W("  none found") end
+	for _, name in ipairs(consts) do
+		DumpValue("Constants." .. name, Get(_G.Constants, name), 1, 2)
+	end
+	W("")
+
+	-- Then the namespaces. Names are listed in full; only reads are called.
+	W("-- C_ namespaces mentioning dye, housing or decor --")
+	local spaces = {}
+	pcall(function()
+		for name, tbl in pairs(_G) do
+			if type(name) == "string" and name:find("^C_") and type(tbl) == "table"
+				and Relevant(name) then
+				spaces[#spaces + 1] = name
+			end
+		end
+	end)
+	table.sort(spaces)
+	if #spaces == 0 then
+		W("  none found")
+		W("")
+		return
+	end
+
+	for _, space in ipairs(spaces) do
+		local tbl = Get(_G, space)
+		local fns = {}
+		pcall(function()
+			for k, v in pairs(tbl) do
+				if type(k) == "string" and type(v) == "function" then fns[#fns + 1] = k end
+			end
+		end)
+		table.sort(fns)
+		W("")
+		W("  %s  (%d functions)", space, #fns)
+		for _, fn in ipairs(fns) do W("    %s", fn) end
+
+		-- Call the readers. No args, then 1, then 2 and 3 — enough to walk a small
+		-- category list without hammering anything.
+		local called = false
+		for _, fn in ipairs(fns) do
+			if LooksLikeRead(fn) and Relevant(fn) then
+				local target = Get(tbl, fn)
+				for _, args in ipairs({ {}, { 1 }, { 2 }, { 3 } }) do
+					local ok, result = pcall(target, unpack(args))
+					if ok and result ~= nil then
+						if not called then W(""); W("    -- read-only calls --"); called = true end
+						local label = ("%s(%s)"):format(fn, table.concat(args, ", "))
+						DumpValue(label, result, 3, 3)
+						break -- first shape that answers is enough
+					end
+				end
+			end
+		end
+	end
+	W("")
+end
+
+--------------------------------------------------------------------------------
 -- Output window — a plain selectable editbox, because chat can't be copied out of
 --------------------------------------------------------------------------------
 
@@ -881,8 +1018,9 @@ function ns.RunProbe(section)
 	if section == "" or section == "panel"    then ProbePanel();    ran = true end
 	if section == "" or section == "swatches" then ProbeSwatches(); ran = true end
 	if section == "" or section == "deep"     then ProbeDeep();     ran = true end
+	if section == "" or section == "api"      then ProbeApi();      ran = true end
 	if not ran then
-		W("unknown section '%s'. Try: addons, items, panel, swatches, deep, or nothing for all.", section)
+		W("unknown section '%s'. Try: api, addons, items, panel, swatches, deep, or nothing for all.", section)
 	end
 
 	ShowOutput(table.concat(out, "\n"))

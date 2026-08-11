@@ -305,3 +305,18 @@ ns.HERBS = {
 	{ key = "herb_79010", name = "Snow Lily", id = 79010, colors = { "white" } },
 	{ key = "herb_79011", name = "Fool's Cap", id = 79011, colors = { "purple" } },
 }
+
+-- Shade record ID -> its entry in ns.SHADES, for reading a dye straight off the
+-- house panel.
+--
+-- DELIBERATELY EMPTY. 12.1's dyeSlotInfo is all IDs and no names — { ID, channel,
+-- dyeColorCategoryID, dyeColorID, orderIndex } — so an unpainted slot tells you
+-- nothing a name lookup can use, and `dyeColorID` is the only handle on which
+-- shade is actually applied. Those record IDs are not published and have not been
+-- read from the game yet, so there is nothing honest to put here.
+--
+-- Housing.lua consults this first and falls through to matching on the shade's
+-- NAME when it comes up empty, which is why the panel still works without it. Fill
+-- it in from `/dye probe api` (the Enum and C_ namespace behind the dye system)
+-- rather than by pairing numbers up with colours that look about right.
+ns.SHADE_BY_COLORID = {}
