@@ -168,7 +168,17 @@ local defaults = {
 		hiddenHerbs = {}, -- [herbNameLower] = true, flowers hidden from the expand view
 		rainbowTitle = true, -- flashy rainbow name (off = plain)
 		housingGoalInput = true, -- show the "Dye Needed" box in the house dye panel
-		showShades = true, -- list a family's color names when its row is opened
+		-- Off by default. Opening a row is nearly always about the flowers, and the
+		-- shades ran straight on after them with no separation -- which read as more
+		-- flower rows that had lost their numbers rather than as a different kind of
+		-- thing. The names are still searchable and still in the row tooltip; this
+		-- only controls whether they get rows of their own.
+		--
+		-- Renamed from `showShades` rather than flipped in place: that key never
+		-- shipped, but it IS saved in dev profiles, and ApplyDefaults will not
+		-- overwrite a stored value -- so changing the default alone would have left
+		-- it on for exactly the profile that asked for it to be off.
+		listShades = true,
 		markHerbs = true, -- green check / red X on flowers in the station's reagent
 		                  -- picker (check = cheapest flower for that color)
 	},
@@ -349,6 +359,13 @@ local function Migrate(db)
 			if LEGACY_KEY_COLOR[key] then db.learned[key] = nil end
 		end
 	end
+
+	-- Keys that never shipped, cleared on every load rather than at a version gate.
+	-- A version-gated step cannot help a profile that is ALREADY at the current
+	-- version, which is every dev profile that has run 2.0 -- and `showShades` is
+	-- only in those. Delete this block once 2.0 is out and no such profile is left.
+	local ui = db.ui
+	if ui then ui.showShades = nil end
 
 	db.version = DB_VERSION
 end

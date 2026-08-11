@@ -208,8 +208,8 @@ local function BuildPanel()
 		function(v) DyeingDownTheHouseDB.ui.housingGoalInput = v end)
 		:SetPoint("TOPLEFT", 16, y)
 	MakeCheck(content, "List a color's shades when you open it",
-		function() return DyeingDownTheHouseDB.ui.showShades ~= false end,
-		function(v) DyeingDownTheHouseDB.ui.showShades = v; ns.Refresh() end)
+		function() return DyeingDownTheHouseDB.ui.listShades == true end,
+		function(v) DyeingDownTheHouseDB.ui.listShades = v; ns.Refresh() end)
 		:SetPoint("TOPLEFT", 16 + COL2, y)
 	y = y - 26
 	MakeCheck(content, "Mark the cheapest flower at the dye station",

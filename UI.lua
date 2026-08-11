@@ -30,6 +30,9 @@ local ADDON, ns = ...
 
 local ROW_H   = 22
 local MAXROWS = 40
+-- Shade names run long ("Netherstorm Fuchsia", "Hinterlands Hickory"), so two
+-- across is the most that fits without truncating at the window's narrowest.
+local SHADE_COLS = 2
 local HEIGHT_MIN, HEIGHT_MAX = 200, 900
 -- The window has a natural "column-fit" width (see ComputeFrameWidth). The user may
 -- drag it narrower or wider within this slack: shrinking is capped so the leftmost
@@ -367,6 +370,33 @@ local function CreateRow(index)
 	row.fDetail:SetJustifyH("LEFT")
 	row.fDetail:SetWordWrap(false) -- keep it a single line; never wrap the verdict
 
+	-- Shade columns. The shade list is a REFERENCE — names you can paint, with no
+	-- count, no price and nothing to do — and running it down the same single
+	-- column as the flowers made it read as more flower rows that had lost their
+	-- numbers. Two per line, its own heading and a rule above it, so the eye reads
+	-- "and here are the colours this paints" instead of "and then some broken rows".
+	row.shadeCols = {}
+	for i = 1, SHADE_COLS do
+		local col = {}
+		col.swatch = row:CreateTexture(nil, "ARTWORK")
+		col.swatch:SetSize(9, 9)
+		col.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		col.text:SetPoint("LEFT", col.swatch, "RIGHT", 5, 0)
+		col.text:SetJustifyH("LEFT")
+		col.text:SetWordWrap(false)
+		col.swatch:Hide()
+		col.text:Hide()
+		row.shadeCols[i] = col
+	end
+
+	-- A hairline above the shade heading, so the block is visibly its own thing.
+	row.shadeRule = row:CreateTexture(nil, "ARTWORK")
+	row.shadeRule:SetColorTexture(1, 1, 1, 0.10)
+	row.shadeRule:SetHeight(1)
+	row.shadeRule:SetPoint("TOPLEFT", row, "TOPLEFT", 30, -2)
+	row.shadeRule:SetPoint("TOPRIGHT", row, "TOPRIGHT", -10, -2)
+	row.shadeRule:Hide()
+
 	-- Column dividers live ON the row (one per column boundary) so they only show
 	-- on color rows — the expanded sub-rows stay clean, no lines through them.
 	row.seps = {}
@@ -432,6 +462,14 @@ end
 -- A sub-row: a flower, or a shade. `color` tints the block's stripe to the family
 -- it belongs to; `last` closes the bottom edge, so a run of them reads as one panel
 -- hanging off the row above rather than as more list items with broken columns.
+-- Hide every sub-row widget. Each mode below then shows only its own, which is
+-- what stops a shade block inheriting a flower's leftovers when a row is reused.
+local function ClearSubWidgets(row)
+	row.fIcon:Hide(); row.fName:Hide(); row.fDetail:Hide()
+	row.shadeRule:Hide()
+	for _, col in ipairs(row.shadeCols) do col.swatch:Hide(); col.text:Hide() end
+end
+
 local function SetSubMode(row, color, last)
 	row.expander:Hide(); row.swatch:Hide(); row.name:Hide()
 	for _, fs in pairs(row.cells) do fs:Hide() end
@@ -439,7 +477,7 @@ local function SetSubMode(row, color, last)
 	-- No column dividers: this block has no columns, and drawing them here is exactly
 	-- what made the layout look broken.
 	for _, s in ipairs(row.seps) do s:Hide() end
-	row.fIcon:Show(); row.fName:Show(); row.fDetail:Show()
+	ClearSubWidgets(row)
 
 	row.bg:SetColorTexture(1, 1, 1, BLOCK_FILL)
 	row.bg:Show()
@@ -621,7 +659,7 @@ function ns.Refresh()
 	-- Build the flat entry list: one color row per family, and when a family is open,
 	-- its flowers followed by the shades it paints.
 	local hideCostly = DyeingDownTheHouseDB.ui.hideCostlyFlowers
-	local showShades = DyeingDownTheHouseDB.ui.showShades ~= false
+	local showShades = DyeingDownTheHouseDB.ui.listShades == true
 	local entries = {}
 
 	-- Marks the ends of each expanded run so the UI can cap the block. Done here
@@ -649,9 +687,10 @@ function ns.Refresh()
 				end
 			end
 
-			-- Then the shades this color paints. A search pulls its matches to the front
-			-- of them: when someone types "obsidium", the one line they came for should
-			-- not be nineteen rows down inside the block.
+			-- Then the shades this color paints, as a block of their own: a rule, a
+			-- heading, then names two across. A search pulls its matches to the front
+			-- of them — when someone types "obsidium", the one line they came for
+			-- should not be nineteen names down inside the block.
 			if showShades then
 				local matched = ns.MatchedShades and ns.MatchedShades(color)
 				local hit, ordered = {}, {}
@@ -662,10 +701,18 @@ function ns.Refresh()
 				for _, shade in ipairs(ns.shadesByColor[color] or {}) do
 					if not hit[shade.name] then ordered[#ordered + 1] = shade end
 				end
-				for _, shade in ipairs(ordered) do
-					entries[#entries + 1] = {
-						kind = "shade", shade = shade, color = color, matched = hit[shade.name],
-					}
+
+				if #ordered > 0 then
+					entries[#entries + 1] = { kind = "shadehead", color = color, count = #ordered }
+					for i = 1, #ordered, SHADE_COLS do
+						local chunk = {}
+						for j = i, math.min(i + SHADE_COLS - 1, #ordered) do
+							chunk[#chunk + 1] = ordered[j]
+						end
+						entries[#entries + 1] = {
+							kind = "shaderow", color = color, shades = chunk, matched = hit,
+						}
+					end
 				end
 			end
 
@@ -747,9 +794,15 @@ function ns.Refresh()
 			local fl = e.flower
 			row.entryKind, row.color = "flower", nil
 			SetSubMode(row, e.color, e.last)
+			row.fIcon:Show(); row.fName:Show(); row.fDetail:Show()
 			local icon = C_Item and C_Item.GetItemIconByID and fl.id and C_Item.GetItemIconByID(fl.id)
 			row.fIcon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
 			row.fIcon:SetVertexColor(1, 1, 1)
+			-- Re-anchored every time, not just where the widget is created: the shade
+			-- heading re-points fName at the row itself, and a row reused for a flower
+			-- would otherwise keep that anchor and sit where the heading sat.
+			row.fName:ClearAllPoints()
+			row.fName:SetPoint("LEFT", row.fIcon, "RIGHT", 6, 0)
 			row.fName:SetText(fl.name)
 			row.fName:SetTextColor(1, 0.82, 0)
 
@@ -766,28 +819,50 @@ function ns.Refresh()
 			row.fDetail:SetText(table.concat(parts, "   ·   "))
 			row:Show()
 
-		elseif e and e.kind == "shade" then
-			-- A shade is a color you can paint, not a thing you can hold — so it gets a
-			-- plain swatch rather than an item icon, and no counts. Reusing the flower
-			-- row's three widgets keeps the block visually of a piece.
-			local shade = e.shade
-			row.entryKind, row.color = "shade", nil
+		elseif e and e.kind == "shadehead" then
+			-- The heading that separates the reference list from the flowers above it.
+			row.entryKind, row.color = "shadehead", nil
+			SetSubMode(row, e.color, false)
+			row.shadeRule:Show()
+			row.fName:Show()
+			row.fName:ClearAllPoints()
+			row.fName:SetPoint("LEFT", row, "LEFT", 32, -1)
+			row.fName:SetText(("Paints %d color%s"):format(e.count, e.count == 1 and "" or "s"))
+			row.fName:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
+			row:Show()
+
+		elseif e and e.kind == "shaderow" then
+			-- Names two across, each with a plain swatch. A shade is a colour you can
+			-- paint, not a thing you can hold — no count, no price, nothing to click.
+			row.entryKind, row.color = "shaderow", nil
 			SetSubMode(row, e.color, e.last)
-			row.fIcon:SetTexture("Interface\\Buttons\\WHITE8X8")
-			local sw = SWATCH[e.color] or { 0.6, 0.6, 0.6 }
-			row.fIcon:SetVertexColor(sw[1], sw[2], sw[3])
-			row.fName:SetText(shade.name)
-			-- A search match is the row the player came for, so it's the one lit up.
-			if e.matched then
-				row.fName:SetTextColor(1, 1, 1)
-			else
-				row.fName:SetTextColor(0.72, 0.72, 0.76)
+			local width = row:GetWidth()
+			local left, colW = 34, math.max(60, (width - 44) / SHADE_COLS)
+			for i, col in ipairs(row.shadeCols) do
+				local shade = e.shades[i]
+				if shade then
+					local sw = SWATCH[shade.color or e.color] or { 0.6, 0.6, 0.6 }
+					col.swatch:ClearAllPoints()
+					col.swatch:SetPoint("LEFT", row, "LEFT", left + (i - 1) * colW, 0)
+					col.swatch:SetColorTexture(sw[1], sw[2], sw[3])
+					col.text:SetWidth(colW - 18)
+					-- A search match is the name the player came for, so it's lit up.
+					if e.matched and e.matched[shade.name] then
+						col.text:SetTextColor(1, 1, 1)
+					else
+						col.text:SetTextColor(0.72, 0.72, 0.76)
+					end
+					-- `guess` means Data.lua inferred this family rather than reading it
+					-- from the game. An unverified placement that looks identical to a
+					-- verified one is worse than a gap, because nobody thinks to check it.
+					col.text:SetText(shade.name .. (shade.guess and "  |cff8a8a94?|r" or ""))
+					col.swatch:Show()
+					col.text:Show()
+				else
+					col.swatch:Hide()
+					col.text:Hide()
+				end
 			end
-			-- `guess` means Data.lua inferred which family this shade belongs to rather
-			-- than reading it from the game. Saying so is the whole point of the flag:
-			-- an unverified placement that looks identical to a verified one is worse
-			-- than not showing it, because nobody would ever think to check it.
-			row.fDetail:SetText(shade.guess and "|cff8a8a94family not confirmed|r" or "")
 			row:Show()
 
 		else

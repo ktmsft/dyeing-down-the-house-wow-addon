@@ -21,8 +21,12 @@ addon is rebuilt to match, which is why this is a 2.0.
   different things. They aren't any more, and both tabs were showing the same nine
   rows.
 - **Open a color to see the shades it paints.** All 77 of them, the 15 new ones
-  included. Searching a shade name finds its family, so typing "obsidium" takes you
-  to Black and pulls the match to the top of the row.
+  included, in a block of their own under the flowers: a rule, a "Paints 7 colors"
+  heading, then the names two across. They're a reference — nothing to hold, count
+  or click — and running them down the same column as the flowers made them read
+  as flower rows with their numbers missing. Searching a shade name finds its
+  family, so typing "obsidium" takes you to Black and pulls the match to the
+  front. Turn the list off in the options if you'd rather just see flowers.
 - **The Pigment column is gone**, along with the pigments. Makeable covers what it
   was for: how many you could make right now from the flowers on hand.
 - **Your goals are carried over, added up.** Five Alliance Blue and three Midnight
