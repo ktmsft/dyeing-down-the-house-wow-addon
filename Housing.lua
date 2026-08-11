@@ -264,10 +264,13 @@ end
 -- The panel
 --------------------------------------------------------------------------------
 
-local HEADER_H  = 28   -- the wood strip
-local TOP_PAD   = 12   -- breathing room under it, before the first row
-local ROW_H     = 32
+local HEADER_H   = 28  -- the wood strip
+local TOP_PAD    = 12  -- breathing room under it, before the first row
+local ROW_H      = 32
 local BOTTOM_PAD = 12
+local PANEL_GAP  = 14  -- clear air between Blizzard's panel and ours
+local SIDE_PAD   = 12  -- row inset; every pixel here is one the detail line loses
+local EDIT_W     = 44
 
 --------------------------------------------------------------------------------
 -- Borrowing Blizzard's panel art
@@ -342,16 +345,16 @@ local function EnsureRow(index)
 
 	row = CreateFrame("Frame", nil, box)
 	row:SetHeight(ROW_H)
-	row:SetPoint("TOPLEFT", box, "TOPLEFT", 14, -(HEADER_H + TOP_PAD + (index - 1) * ROW_H))
-	row:SetPoint("TOPRIGHT", box, "TOPRIGHT", -14, -(HEADER_H + TOP_PAD + (index - 1) * ROW_H))
+	row:SetPoint("TOPLEFT", box, "TOPLEFT", SIDE_PAD, -(HEADER_H + TOP_PAD + (index - 1) * ROW_H))
+	row:SetPoint("TOPRIGHT", box, "TOPRIGHT", -SIDE_PAD, -(HEADER_H + TOP_PAD + (index - 1) * ROW_H))
 
 	row.swatch = row:CreateTexture(nil, "ARTWORK")
 	row.swatch:SetSize(10, 10)
 	row.swatch:SetPoint("TOPLEFT", 0, -2)
 
 	row.edit = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-	row.edit:SetSize(50, 18)
-	row.edit:SetPoint("TOPRIGHT", -6, -1)
+	row.edit:SetSize(EDIT_W, 18)
+	row.edit:SetPoint("TOPRIGHT", -4, -1)
 	row.edit:SetAutoFocus(false)
 	row.edit:SetNumeric(true)
 	row.edit:SetMaxLetters(5)
@@ -362,13 +365,13 @@ local function EnsureRow(index)
 
 	row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	row.name:SetPoint("TOPLEFT", row.swatch, "TOPRIGHT", 6, 2)
-	row.name:SetPoint("RIGHT", row.edit, "LEFT", -8, 0)
+	row.name:SetPoint("RIGHT", row.edit, "LEFT", -6, 0)
 	row.name:SetJustifyH("LEFT")
 	row.name:SetWordWrap(false)
 
 	row.detail = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 	row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)
-	row.detail:SetPoint("RIGHT", row.edit, "LEFT", -8, 0)
+	row.detail:SetPoint("RIGHT", row.edit, "LEFT", -6, 0)
 	row.detail:SetJustifyH("LEFT")
 	row.detail:SetWordWrap(false)
 
@@ -387,8 +390,8 @@ local function EnsureBox(pane)
 	box = CreateFrame("Frame", nil, outer)
 	box.rows = {}
 	box:SetHeight(HEADER_H + TOP_PAD + ROW_H + BOTTOM_PAD)
-	box:SetPoint("TOPLEFT", outer, "BOTTOMLEFT", 0, -2)
-	box:SetPoint("TOPRIGHT", outer, "BOTTOMRIGHT", 0, -2)
+	box:SetPoint("TOPLEFT", outer, "BOTTOMLEFT", 0, -PANEL_GAP)
+	box:SetPoint("TOPRIGHT", outer, "BOTTOMRIGHT", 0, -PANEL_GAP)
 
 	-- Background, borrowed from the pane above it.
 	local srcBG = FollowFrom(outer, { "Background" })
@@ -473,14 +476,18 @@ local function UpdatePanel()
 		-- The counts are OURS, not the panel's. Blizzard's numOwned is what this
 		-- character can reach; ours is every character, both banks and the Warband
 		-- bank, which is what the goal beside it is measured against.
+		-- Kept short on purpose: this line shares its width with the entry box, and
+		-- "25 flowers make 2 m..." truncated is worse than saying less. Both numbers
+		-- survive because both are the point -- what you hold, and what the flowers
+		-- you already have would turn into.
 		local rc = ns.GetRecipeStatus and ns.GetRecipeStatus(entry.color)
 		local have = ns.GetTotal and ns.GetTotal(entry.color) or 0
 		local detail = ("have %d"):format(have)
 		if rc then
 			if rc.ownedHerbs > 0 then
-				detail = ("%s  ·  %d flowers make %d more"):format(detail, rc.ownedHerbs, rc.craftableNow)
+				detail = ("%s  ·  %d flowers make %d"):format(detail, rc.ownedHerbs, rc.craftableNow)
 			else
-				detail = detail .. "  ·  no flowers for it"
+				detail = detail .. "  ·  no flowers"
 			end
 		end
 		row.detail:SetText(detail)
