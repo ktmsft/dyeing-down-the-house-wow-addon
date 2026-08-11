@@ -268,7 +268,7 @@ local HEADER_H   = 28  -- the wood strip
 local TOP_PAD    = 12  -- breathing room under it, before the first row
 local ROW_H      = 32
 local BOTTOM_PAD = 12
-local PANEL_GAP  = 14  -- clear air between Blizzard's panel and ours
+local PANEL_GAP  = 10  -- fallback; PanelGap() measures the real one
 local SIDE_PAD   = 12  -- row inset; every pixel here is one the detail line loses
 local EDIT_W     = 44
 
@@ -332,6 +332,36 @@ local function ArtBleed(texture, frame)
 	return bx, by
 end
 
+-- The gap to leave between Blizzard's panel and ours.
+--
+-- Measured, not chosen. The swatch grid sits to the left of the customize pane
+-- with a gutter between them, and that gutter is what "the padding between these
+-- boxes" means here — so the right answer is whatever Blizzard already used, not a
+-- number picked to look about right at one UI scale.
+--
+-- Both pairs of panels are built from the same art with the same bleed, so equal
+-- FRAME gaps give equal VISUAL gaps and no border arithmetic is needed. Cached
+-- once measured: it is a layout constant, not something that moves.
+local measuredGap
+
+local function PanelGap(outer)
+	if measuredGap then return measuredGap end
+	local popout = _G.DyeSelectionPopout
+	if not popout then return PANEL_GAP end
+	local ok, gap = pcall(function()
+		local right, left = popout:GetRight(), outer:GetLeft()
+		if not (right and left) then return nil end
+		return left - right
+	end)
+	-- Sanity-bounded: a frame that hasn't been laid out, or a popout on the other
+	-- side of the screen, must not push our panel somewhere absurd.
+	if ok and type(gap) == "number" and gap > 0 and gap < 80 then
+		measuredGap = gap
+		return gap
+	end
+	return PANEL_GAP
+end
+
 local function CommitRow(row)
 	if not (row and row.target) then return end
 	ns.SetGoal(row.target, tonumber(row.edit:GetText()) or 0)
@@ -389,6 +419,7 @@ local function EnsureBox(pane)
 
 	box = CreateFrame("Frame", nil, outer)
 	box.rows = {}
+	box.outer = outer
 	box:SetHeight(HEADER_H + TOP_PAD + ROW_H + BOTTOM_PAD)
 	box:SetPoint("TOPLEFT", outer, "BOTTOMLEFT", 0, -PANEL_GAP)
 	box:SetPoint("TOPRIGHT", outer, "BOTTOMRIGHT", 0, -PANEL_GAP)
@@ -453,6 +484,17 @@ local function UpdatePanel()
 	if not colors or #colors == 0 then if box then box:Hide() end return end
 
 	EnsureBox(pane)
+
+	-- Re-anchor if the measured gutter has arrived since last time. The swatch grid
+	-- has usually never been opened when the panel is first built, so the first pass
+	-- uses the fallback and this corrects it the moment there's something to measure.
+	local gap = PanelGap(box.outer)
+	if box.gap ~= gap then
+		box.gap = gap
+		box:ClearAllPoints()
+		box:SetPoint("TOPLEFT", box.outer, "BOTTOMLEFT", 0, -gap)
+		box:SetPoint("TOPRIGHT", box.outer, "BOTTOMRIGHT", 0, -gap)
+	end
 
 	for index, entry in ipairs(colors) do
 		local row = EnsureRow(index)

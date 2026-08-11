@@ -80,13 +80,20 @@ for _, file in ipairs(FILES) do
 		-- Every name this file defines, however it defines it. Check 2 needs all of
 		-- them; check 1 only cares about the `local function` ones, because those
 		-- are the ones whose declaration line is meaningful.
-		-- String literals are blanked before anything is scanned. Without that, a
-		-- perfectly ordinary bit of prose inside a quoted string — `W("-- the
-		-- DyeSelectionPopout (grid) --")` — reads as a call to a function named
-		-- DyeSelectionPopout. Crude, but a tokenizer is not worth writing here.
+		-- Reduce each line to just its code before scanning.
+		--
+		-- Strings are blanked first, or a perfectly ordinary bit of prose inside one
+		-- — `W("-- the DyeSelectionPopout (grid) --")` — reads as a call to a
+		-- function named DyeSelectionPopout.
+		--
+		-- Then trailing comments go, or a note ABOUT a function counts as a use of
+		-- it: `local PANEL_GAP = 10  -- fallback; PanelGap() measures the real one`
+		-- was reported as calling PanelGap 76 lines before its declaration. Strings
+		-- have to be blanked first so a `--` inside one isn't mistaken for the start
+		-- of a comment. Crude, but a tokenizer is not worth writing here.
 		local code = {}
 		for n, line in ipairs(lines) do
-			code[n] = line:gsub('"[^"]*"', '""'):gsub("'[^']*'", "''")
+			code[n] = line:gsub('"[^"]*"', '""'):gsub("'[^']*'", "''"):gsub("%-%-.*$", "")
 		end
 
 		local declaredAt, defined = {}, {}
