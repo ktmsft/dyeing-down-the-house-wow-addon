@@ -30,12 +30,20 @@ local ADDON, ns = ...
 -- color are a pool shared by every shade in that family.
 --
 -- ON UNVERIFIED DATA. The rule in this file has always been that an ID is read
--- from the game or it doesn't ship. 12.1 is on the PTR and not on live, so some
--- of what follows cannot be read yet. Rather than quietly guess, anything not yet
--- confirmed is marked: item IDs are left `nil` (the name-matching in Core learns
--- them the first time one lands in your bags), and a shade whose family is an
--- inference carries `guess = true` so the UI can say so out loud. Clearing those
--- flags is a PTR job, and reference/12.1-verification.md is the list.
+-- from the game or it doesn't ship. Anything not yet confirmed is marked: item IDs
+-- are left `nil`, and a shade whose family is an inference carries `guess = true`
+-- so the UI can say so out loud.
+--
+-- MOST OF THAT IS NOW FILLED IN AT LOGIN. 12.1 ships C_DyeColor, which hands over
+-- every shade's name and the dye item it costs, so Discover.lua reads the item IDs
+-- and the shade -> family map straight from the client and clears the guess flags
+-- as it goes. What is written below is the fallback, not the answer: it is what the
+-- addon knows before the API replies, what the tests run against, and what keeps
+-- the window populated if C_DyeColor is missing or renamed.
+--
+-- So DON'T hand-edit values here to match what the game reported. Discovery will
+-- do it every session anyway, and a hand-copied ID is a second source of truth
+-- that can drift. reference/12.1-verification.md tracks what genuinely remains.
 --------------------------------------------------------------------------------
 
 -- The nine dye colors. Order here is the default display order.
@@ -64,11 +72,14 @@ ns.HERBS_PER_DYE = ns.HERBS_PER_DYE or 10
 --   id     retail item ID (number), or nil until read from the game
 --   color  the color family, same string as the key
 --
--- IDs ARE NOT KNOWN YET — 12.1 is PTR-only, and this file does not carry guessed
--- item IDs. `nil` is a supported state: ResolveEntry in Core matches on name and
--- learns the ID the first time the item is seen in a bag, which is the same path
--- that has always covered an item Blizzard adds mid-patch. Counting works from
--- that moment on. Fill these in from the PTR and the fallback stops mattering.
+-- IDs ARE DELIBERATELY nil. Discover.lua fills them in at login from
+-- C_DyeColor.GetDyeColorInfo, which reports the dye item each shade costs — so the
+-- real IDs arrive from the client every session and never need to be written here.
+--
+-- `nil` is a fully supported state regardless: ResolveEntry in Core matches on the
+-- item's exact name and learns the ID the first time one is seen in a bag, which is
+-- the same path that has always covered an item Blizzard adds mid-patch. Between
+-- the two, a colour counts whether or not the API answered.
 ns.DYES = {
 	{ key = "black",  name = "Black Housing Dye",  id = nil, color = "black" },
 	{ key = "blue",   name = "Blue Housing Dye",   id = nil, color = "blue" },
@@ -89,8 +100,9 @@ ns.DYES = {
 --
 --   name   the color as it reads in the house customization panel (no "Dye" suffix)
 --   color  the family whose dye it costs
---   guess  present and true when that family is INFERRED, not read from the game
---          (see reference/12.1-verification.md)
+--   guess  present and true when that family is INFERRED, not read from the game.
+--          Discover.lua clears it the moment C_DyeColor confirms the placement, and
+--          the window prints "family not confirmed" under any that are still set.
 --
 -- The 62 old shades keep the family their dye's pigment gave them, which is solid:
 -- it was read off the recipes themselves. Three groups are marked `guess`:

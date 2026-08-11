@@ -195,6 +195,7 @@ SlashCmdList = {}
 local ns = {}
 assert(loadfile(DIR .. "Data.lua"))("DyeingDownTheHouse", ns)
 assert(loadfile(DIR .. "Core.lua"))("DyeingDownTheHouse", ns)
+assert(loadfile(DIR .. "Discover.lua"))("DyeingDownTheHouse", ns)
 assert(loadfile(DIR .. "Prices.lua"))("DyeingDownTheHouse", ns)
 
 --------------------------------------------------------------------------------
@@ -1335,6 +1336,139 @@ print("\n-- A profile created after 12.1 is left alone --")
 DyeingDownTheHouseDB = { version = 3, goals = { red = 12 }, ui = {} }
 Fire("ADDON_LOADED", "DyeingDownTheHouse")
 check("its goals survive untouched", DyeingDownTheHouseDB.goals.red, 12)
+
+--------------------------------------------------------------------------------
+-- Discovery: reading the dyes out of C_DyeColor
+--
+-- 12.1 ships an API that answers what Data.lua could only infer -- every shade's
+-- name and the item it costs. Grouping shades by that item yields the families,
+-- their item IDs and the shade -> family map, all from the client.
+--
+-- What's guarded here is mostly what discovery must NOT do. It runs against live
+-- data on someone's account, it rewrites the table the whole addon is driven from,
+-- and a bad pass would be both invisible and permanent for that session.
+--------------------------------------------------------------------------------
+
+print("\n-- Discovery from C_DyeColor --")
+
+-- Reset to a known fixture: two families, one shade each side, plus a shade
+-- Data.lua has never heard of and a family whose item cannot be named yet.
+ns.COLORS = { "red", "blue", "green", "white" }
+ns.DYES = {
+	{ key = "red",   name = "Red Housing Dye",   color = "red" },
+	{ key = "green", name = "Green Housing Dye", color = "green" },
+	{ key = "blue",  name = "Blue Housing Dye",  color = "blue" },
+	{ key = "white", name = "White Housing Dye", color = "white" },
+}
+ns.SHADES = {
+	{ name = "Crimson", color = "red" },
+	{ name = "Scarlet", color = "red" },
+	{ name = "Azure",   color = "blue" },
+	{ name = "Plain",   color = "blue", guess = true },
+	{ name = "Moss",    color = "green" },
+}
+ns.SHADE_BY_COLORID = {}
+ns.RebuildLookups()
+
+-- 800001 names itself; 800003 does NOT (uncached), so it has to be placed by the
+-- shades it holds. 800004 can be placed by neither and must be left alone.
+ITEM_NAMES[800001] = "Red Housing Dye"
+ITEM_NAMES[800003] = nil
+ID_BY_NAME["Red Housing Dye"] = 800001
+
+local requested = {}
+C_Item.RequestLoadItemDataByID = function(id) requested[#requested + 1] = id end
+
+C_DyeColor = {
+	GetAllDyeColors = function() return { 11, 12, 13, 14, 15, 16 } end,
+	GetDyeColorInfo = function(colorID)
+		local rows = {
+			[11] = { ID = 11, name = "Crimson",   itemID = 800001 },
+			[12] = { ID = 12, name = "Scarlet",   itemID = 800001 },
+			-- a shade the fixture has never seen, on a known item
+			[13] = { ID = 13, name = "Vermilion", itemID = 800001 },
+			-- an item with no cached name: placed by its shades instead
+			[14] = { ID = 14, name = "Azure",     itemID = 800003 },
+			[15] = { ID = 15, name = "Plain",     itemID = 800003 },
+			-- an item that can be placed by nothing at all
+			[16] = { ID = 16, name = "Puce",      itemID = 800004 },
+		}
+		return rows[colorID]
+	end,
+}
+
+local dok, dinfo = ns.DiscoverDyes()
+check("discovery ran", dok, true)
+check("every shade was read", dinfo.shades, 6)
+check("three distinct dye items seen", dinfo.items, 3)
+check("two of them were placed", dinfo.colors, 2)
+check("the unplaceable one is pending", dinfo.pending, 1)
+
+print("\n-- Item IDs land on the right family --")
+check("red learned its item ID from the item name", ns.byKey.red.id, 800001)
+check("blue was placed by its shades instead", ns.byKey.blue.id, 800003)
+check("an unplaceable item is NOT guessed onto a family", ns.byKey.white.id, nil)
+check("...and green is untouched too", ns.byKey.green.id, nil)
+check("the client was asked to load the unnamed item", requested[1] ~= nil, true)
+
+print("\n-- Shades are placed and their guess flags cleared --")
+local function shade(name)
+	for _, sh in ipairs(ns.SHADES) do if sh.name == name then return sh end end
+end
+check("a known shade keeps its family", shade("Crimson").color, "red")
+check("...and carries the game's colour ID", shade("Crimson").dyeColorID, 11)
+check("a GUESSED family is confirmed by the game", shade("Plain").color, "blue")
+check("...and stops being flagged as a guess", shade("Plain").guess, nil)
+check("a shade Data.lua never knew is added", shade("Vermilion") ~= nil, true)
+check("...on the right family", shade("Vermilion").color, "red")
+check("a shade on an unplaceable item is left alone", shade("Puce"), nil)
+
+print("\n-- The colour-ID index the house panel reads --")
+check("indexed by the game's dyeColorID", ns.SHADE_BY_COLORID[11].name, "Crimson")
+check("a newly added shade is indexed too", ns.SHADE_BY_COLORID[13].name, "Vermilion")
+check("an unplaced shade is not indexed", ns.SHADE_BY_COLORID[16], nil)
+
+print("\n-- Lookups are rebuilt, so the rest of the addon sees it --")
+check("the new shade joins its family", #ns.shadesByColor.red, 3)
+check("searching finds a shade discovered at runtime", #ns.FilterDyes("vermilion"), 1)
+check("...and lands on its family", ns.FilterDyes("vermilion")[1].key, "red")
+check("the learned item ID resolves in byID", ns.byID[800001].key, "red")
+
+print("\n-- Running it twice changes nothing --")
+local before = #ns.SHADES
+ns.DiscoverDyes()
+check("shades are not duplicated", #ns.SHADES, before)
+check("item IDs are unchanged", ns.byKey.red.id, 800001)
+
+print("\n-- The item name wins over the shades when they disagree --")
+-- Data.lua says Moss is green; the game says its item is the RED dye. The item is
+-- the fact and the static table is the inference, so the item has to win -- this is
+-- the case that fixes a wrong colour rather than entrenching it.
+C_DyeColor.GetAllDyeColors = function() return { 21 } end
+C_DyeColor.GetDyeColorInfo = function() return { ID = 21, name = "Moss", itemID = 800001 } end
+ns.DiscoverDyes()
+check("the shade moves to the item's family", shade("Moss").color, "red")
+
+print("\n-- A client without C_DyeColor is not a failure --")
+C_DyeColor = nil
+local nok, nerr = ns.DiscoverDyes()
+check("it declines rather than erroring", nok, false)
+check("...and says why", type(nerr), "string")
+check("the data it already learned survives", ns.byKey.red.id, 800001)
+
+print("\n-- A broken API cannot take the addon down --")
+C_DyeColor = {
+	GetAllDyeColors = function() error("C_DyeColor exploded") end,
+	GetDyeColorInfo = function() error("C_DyeColor exploded") end,
+}
+local sok = ns.DiscoverDyes()
+check("an erroring API is survivable", sok, false)
+C_DyeColor = {
+	GetAllDyeColors = function() return { 31 } end,
+	GetDyeColorInfo = function() error("boom") end,
+}
+check("a throwing per-colour call is survivable", (pcall(ns.DiscoverDyes)), true)
+C_DyeColor = nil
 
 print(("\n%d checks, %d failures"):format(checks, failures))
 os.exit(failures == 0 and 0 or 1)

@@ -10,8 +10,8 @@
 --
 -- Run: luajit tools/check_order.lua
 
-local FILES = { "Data.lua", "Core.lua", "Prices.lua", "UI.lua", "Options.lua",
-	"Housing.lua", "Probe.lua" }
+local FILES = { "Data.lua", "Core.lua", "Discover.lua", "Prices.lua", "UI.lua",
+	"Options.lua", "Housing.lua", "Probe.lua" }
 local root = (arg[0]:match("^(.*[/\\])") or "") .. ".."
 local sep = package.config:sub(1, 1)
 

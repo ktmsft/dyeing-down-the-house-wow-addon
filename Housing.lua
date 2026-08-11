@@ -214,24 +214,6 @@ local function Commit()
 	if ns.Refresh then ns.Refresh() end
 end
 
--- Where to hang the box, best first. Each entry says which frame to anchor to and
--- which way to grow from it.
---
--- The Cost line used to be the obvious anchor and is now the wrong one: 12.1's
--- DyeCostContainer is 39x16, and growing a 40px box UPWARD from something that
--- short lands it squarely on top of the Dye Slot 2 row. The panel has an obvious
--- empty band between Cost and the Cancel/Apply buttons, so the box goes there —
--- above the button frame, growing up into space nothing else uses.
-local ANCHORS = {
-	-- The button frame sits at the bottom of the outer customize pane. Anchoring
-	-- above it puts us in that empty band whatever the panel's height.
-	{ path = { "customizePane", "ButtonFrame" }, point = "BOTTOMLEFT", to = "TOPLEFT", x = 10, y = 12 },
-	-- Failing that, below the dye slots — still clear of them, may crowd Cost.
-	{ path = { "DyeSlotContainer" }, point = "TOPLEFT", to = "BOTTOMLEFT", x = 4, y = -8 },
-	-- Last resort: above the Cost line, the pre-12.1 position.
-	{ path = { "DyeCostContainer" }, point = "BOTTOMLEFT", to = "TOPLEFT", x = 4, y = 8 },
-}
-
 local function FollowFrom(root, path)
 	local node = root
 	for _, part in ipairs(path) do
@@ -242,26 +224,125 @@ local function FollowFrom(root, path)
 	return node
 end
 
+--------------------------------------------------------------------------------
+-- Borrowing Blizzard's panel art
+--
+-- The box sits in its own little panel below the customize pane, and it has to
+-- look like it belongs there. The way to guarantee that is not to find out what
+-- the housing panel's atlas is called and hardcode it — that's a name to guess
+-- wrong now and a name to break later. It's to READ the art off the live panel
+-- and apply the same values to ours. Blizzard can rename, restyle or reskin the
+-- whole thing and we follow along for free, because we never knew the name.
+--
+-- Everything here is feature-detected and pcall'd, and every one of them can fail
+-- independently: no atlas is survivable (we fall back to a plain dark backdrop),
+-- no header is survivable (the panel just has no title strip).
+--------------------------------------------------------------------------------
+
+-- Copy one texture's appearance onto another. Atlas first, because that's how the
+-- modern UI is built and it carries its own sizing; a plain file path with tex
+-- coords is the older shape and still worth handling.
+local function CopyArt(dest, source)
+	if not (dest and source) then return false end
+	local atlas = nil
+	pcall(function() atlas = source.GetAtlas and source:GetAtlas() end)
+	if atlas then
+		local ok = pcall(function() dest:SetAtlas(atlas, true) end)
+		if ok then return true end
+	end
+	local file = nil
+	pcall(function() file = source.GetTexture and source:GetTexture() end)
+	if file then
+		local ok = pcall(function()
+			dest:SetTexture(file)
+			dest:SetTexCoord(source:GetTexCoord())
+		end)
+		if ok then return true end
+	end
+	return false
+end
+
+-- How far a Blizzard panel's background texture overhangs its frame, so ours can
+-- overhang by the same amount and the borders line up. Read rather than assumed:
+-- the customize pane is a 269x280 frame under a 289x300 texture, which is a 10px
+-- bleed on every side, and that number is theirs to change.
+local function ArtBleed(texture, frame)
+	local bx, by = 0, 0
+	pcall(function()
+		bx = math.max(0, (texture:GetWidth() - frame:GetWidth()) / 2)
+		by = math.max(0, (texture:GetHeight() - frame:GetHeight()) / 2)
+	end)
+	return bx, by
+end
+
+local PANEL_H = 74
+
 local function EnsureBox(pane)
 	if box then return box end
-	-- Parented to the pane, but anchored to whichever frame ANCHORS finds. Both
-	-- descend from the same customize pane, so a cross-anchor is safe.
-	box = CreateFrame("Frame", nil, pane)
-	box:SetSize(220, 34)
+
+	-- Parent to the outer customize pane, not the DyePane: ours is a sibling panel
+	-- hanging off the bottom of the whole thing, and parenting it there means it
+	-- inherits show/hide from the panel it belongs to for free.
+	local outer = FollowFrom(pane, { "customizePane" }) or pane
+
+	box = CreateFrame("Frame", nil, outer)
+	box:SetHeight(PANEL_H)
+	box:SetPoint("TOPLEFT", outer, "BOTTOMLEFT", 0, -2)
+	box:SetPoint("TOPRIGHT", outer, "BOTTOMRIGHT", 0, -2)
+
+	-- Background, borrowed from the pane above it.
+	local srcBG = FollowFrom(outer, { "Background" })
+	box.bg = box:CreateTexture(nil, "BACKGROUND")
+	if srcBG and CopyArt(box.bg, srcBG) then
+		local bx, by = ArtBleed(srcBG, outer)
+		box.bg:SetPoint("TOPLEFT", -bx, by)
+		box.bg:SetPoint("BOTTOMRIGHT", bx, -by)
+	else
+		-- No art to borrow. A plain dark fill still reads as a panel rather than as
+		-- floating text over the world, which is the thing actually worth avoiding.
+		box.bg:SetAllPoints()
+		box.bg:SetColorTexture(0.05, 0.04, 0.03, 0.92)
+	end
+
+	-- Header strip, same trick.
+	local srcHeader = FollowFrom(outer, { "WoodHeader" })
+	if srcHeader then
+		box.header = box:CreateTexture(nil, "BORDER")
+		if CopyArt(box.header, srcHeader) then
+			local hx = ArtBleed(srcHeader, outer)
+			local h = 26
+			pcall(function() h = math.min(30, srcHeader:GetHeight() or 30) end)
+			box.header:SetPoint("TOPLEFT", -hx, 0)
+			box.header:SetPoint("TOPRIGHT", hx, 0)
+			box.header:SetHeight(h)
+		else
+			box.header:Hide()
+			box.header = nil
+		end
+	end
+
+	-- Title, styled off the pane's own decor-name label so the font follows theirs.
+	box.title = box:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	box.title:SetPoint("TOP", 0, -8)
+	box.title:SetText("Dye Needed")
+	local srcTitle = FollowFrom(outer, { "DecorName" })
+	if srcTitle then
+		pcall(function()
+			local font, size, flags = srcTitle:GetFont()
+			if font then box.title:SetFont(font, size, flags) end
+			box.title:SetTextColor(srcTitle:GetTextColor())
+		end)
+	end
 
 	box.name = box:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	box.name:SetPoint("TOPLEFT", 0, 0)
-	box.name:SetPoint("TOPRIGHT", 0, 0)
+	box.name:SetPoint("TOPLEFT", 14, -32)
+	box.name:SetPoint("TOPRIGHT", -14, -32)
 	box.name:SetJustifyH("LEFT")
 	box.name:SetWordWrap(false)
 
-	box.label = box:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	box.label:SetPoint("TOPLEFT", 0, -15)
-	box.label:SetText("Dye Needed")
-
 	box.edit = CreateFrame("EditBox", nil, box, "InputBoxTemplate")
-	box.edit:SetSize(46, 18)
-	box.edit:SetPoint("LEFT", box.label, "RIGHT", 12, 0)
+	box.edit:SetSize(52, 18)
+	box.edit:SetPoint("TOPLEFT", 18, -48)
 	box.edit:SetAutoFocus(false)
 	box.edit:SetNumeric(true)
 	box.edit:SetMaxLetters(5)
@@ -270,17 +351,12 @@ local function EnsureBox(pane)
 	box.edit:SetScript("OnEditFocusLost", Commit)
 	box.edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
-	box:ClearAllPoints()
-	for _, spot in ipairs(ANCHORS) do
-		local anchor = FollowFrom(pane, spot.path)
-		if anchor then
-			box:SetPoint(spot.point, anchor, spot.to, spot.x, spot.y)
-			return box
-		end
-	end
-	-- Nothing recognisable to hang it on. Sit at the pane's bottom-left rather than
-	-- unanchored, which would park it at the centre of the screen.
-	box:SetPoint("TOPLEFT", pane, "BOTTOMLEFT", 4, -8)
+	box.hint = box:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	box.hint:SetPoint("LEFT", box.edit, "RIGHT", 10, 0)
+	box.hint:SetPoint("RIGHT", box, "RIGHT", -14, 0)
+	box.hint:SetJustifyH("LEFT")
+	box.hint:SetWordWrap(false)
+
 	return box
 end
 

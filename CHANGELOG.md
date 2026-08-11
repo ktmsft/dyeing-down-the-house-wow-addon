@@ -41,15 +41,24 @@ addon is rebuilt to match, which is why this is a 2.0.
   there's no crafting book to manage any more, you take herbs to the station and
   click it.
 
+### Added
+
+- **The dyes are read from the game, not from a table.** 12.1 ships an API that
+  reports every color's name and the dye item it costs, so the addon learns the
+  nine item IDs and which of the 77 colors belongs to which family at login,
+  every session. Blizzard adding colors mid-patch now needs no update from me.
+- **A "Dye Needed" panel under the house dye window**, styled from the panel above
+  it. It reads the color you have selected, says which family it costs, and sets
+  that family's goal.
+
 ### Known gaps
 
-- The "Dye Needed" box in the house dye panel doesn't appear yet. 12.1 rebuilt that
-  panel and moved everything the box anchored to.
-- The nine dye items are matched by name until their item IDs can be read from the
-  game, so a color counts from the first time you hold one.
-- Nine shades are shown with "family not confirmed" under them. Blizzard hasn't said
-  which family they landed in, and a guess that looks like a fact is worse than a
-  gap.
+- How many flowers one dye takes is assumed to be ten, carried over from the old
+  two-step recipe. Blizzard never stated it. If it turns out to be different,
+  every Makeable and Cost figure moves by the same factor.
+- The dye station itself isn't decorated yet. The old crafting-window markers went
+  with the recipes; marking the cheapest flower at the station is the replacement
+  and isn't in this release.
 
 ## [1.3.0] — 2026-08-04
 

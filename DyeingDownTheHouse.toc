@@ -12,6 +12,7 @@
 
 Data.lua
 Core.lua
+Discover.lua
 Prices.lua
 UI.lua
 Options.lua
