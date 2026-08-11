@@ -1,5 +1,5 @@
--- Catches two Lua traps that WoW turns into silent feature outages. Both compile
--- cleanly, so neither shows up until the code path actually runs.
+-- Catches three Lua traps that WoW turns into silent feature outages. All of them
+-- compile cleanly, so none shows up until the code path actually runs.
 --
 -- 1. A FORWARD REFERENCE to a file-scope local:
 --
@@ -21,6 +21,15 @@
 --    to be "before" — and the panel just stopped appearing with no error until the
 --    code ran. Deleting a definition is at least as easy as misordering one, so
 --    both are worth checking.
+--
+-- 3. A CONSTANT THAT WAS RENAMED:
+--
+--      for i = 1, #ORDER do                   -- ORDER is now ORDER_BY_TAB
+--
+--    Check 2 only looks at things being CALLED, so a bare read walked straight
+--    past it: a nil global, an error on the first row built, and a window that
+--    never appeared. Only ALL-CAPS names are checked, because every constant here
+--    is written that way and a broader rule would flag every local in the file.
 --
 -- Run: luajit tools/check_order.lua
 
@@ -53,7 +62,9 @@ local KNOWN_GLOBALS = {
 	Enum = true, Constants = true,
 	-- hooks and misc
 	SlashCmdList = true, RunTimers = true, hooksecurefunc = true,
-	GetCoinTextureString = true,
+	GetCoinTextureString = true, STANDARD_TEXT_FONT = true,
+	-- foreign addons we read through, feature-detected at every call site
+	TSM_API = true, Auctionator = true, DataStore = true,
 	OpenProfessionsItemFlyout = true, ProfessionsFrame = true,
 }
 
@@ -156,6 +167,34 @@ for _, file in ipairs(FILES) do
 					if not token:find("[%.:]") and token:match("^[A-Z]")
 						and not defined[token] and not KNOWN_GLOBALS[token] then
 						print(("  %s:%d calls %s(), which is never defined in this file")
+							:format(file, n, token))
+						problems = problems + 1
+					end
+				end
+
+				-- 3. an UPPER_CASE constant that isn't defined here. Check 2 only looks
+				-- at things being CALLED, so `for i = 1, #ORDER do` sailed straight past
+				-- it after ORDER was renamed ORDER_BY_TAB: a nil global, an error on the
+				-- first row built, and a window that never appeared.
+				--
+				-- Narrowed to ALL-CAPS on purpose. Every constant in this addon is
+				-- written that way, while checking every capitalised identifier would
+				-- flag each local frame, entry and widget in the file. A tight rule that
+				-- stays on is worth more than a broad one that gets switched off.
+				-- A name with `=` after it is being WRITTEN, not read: a global this
+				-- addon deliberately sets (SLASH_DYEINGDOWNTHEHOUSE1), or a key in a
+				-- table constructor (`{ ID = 11 }`). Neither is a lookup that can come
+				-- back nil, so neither is this check's business. `==` is a comparison
+				-- and stays in scope.
+				local assigned = {}
+				for name in line:gmatch("([%w_]+)%s*=[^=]") do assigned[name] = true end
+
+				for token in line:gmatch("([%w_%.:]+)") do
+					if not token:find("[%.:]") and #token > 1
+						and token:match("^[A-Z][A-Z0-9_]*$")
+						and not assigned[token]
+						and not defined[token] and not KNOWN_GLOBALS[token] then
+						print(("  %s:%d reads %s, which is never defined in this file")
 							:format(file, n, token))
 						problems = problems + 1
 					end

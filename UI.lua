@@ -438,7 +438,10 @@ local function CreateRow(index)
 	-- Column dividers live ON the row (one per column boundary) so they only show
 	-- on color rows — the expanded sub-rows stay clean, no lines through them.
 	row.seps = {}
-	for i = 1, #ORDER do
+	-- Enough for whichever tab has the most columns. Rows are pooled and reused
+	-- across both, so a row built while the narrow tab was up still needs the
+	-- dividers the wide one will ask for.
+	for i = 1, math.max(#ORDER_BY_TAB.color, #ORDER_BY_TAB.dye) do
 		local s = row:CreateTexture(nil, "ARTWORK")
 		s:SetColorTexture(1, 1, 1, 0.07)
 		s:SetWidth(1)
