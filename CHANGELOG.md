@@ -55,9 +55,6 @@ addon is rebuilt to match, which is why this is a 2.0.
 
 ### Known gaps
 
-- How many flowers one dye takes is assumed to be ten, carried over from the old
-  two-step recipe. Blizzard never stated it. If it turns out to be different,
-  every Makeable and Cost figure moves by the same factor.
 - The dye station itself isn't decorated yet. The old crafting-window markers went
   with the recipes; marking the cheapest flower at the station is the replacement
   and isn't in this release.

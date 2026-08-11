@@ -57,11 +57,15 @@ ns.COLORS = {
 
 -- How many herbs one dye costs at the station.
 --
--- UNVERIFIED. It was 10 herbs -> 1 pigment -> 1 dye, so ten is the number that
--- carries over, and Blizzard described the change as removing the middle step
--- rather than repricing it. But they never stated a ratio, so treat this as the
--- best available guess until someone stands at a station and counts. It's a field
--- rather than a magic number precisely so correcting it is a one-line edit.
+-- CONFIRMED at a station on the 12.1 PTR (2026-08-10). Blizzard never stated a
+-- ratio anywhere, so this was carried over from the old two-step chain -- 10 herbs
+-- -> 1 pigment -> 1 dye -- on the reasoning that they described the change as
+-- removing the middle step rather than repricing it. That reading turned out to be
+-- right, but it was a reading until someone counted.
+--
+-- It stays a field rather than a magic number: every Makeable, Cost and
+-- flowers-short figure in the addon is derived from it, so a balance change is a
+-- one-line edit here instead of a hunt.
 ns.HERBS_PER_DYE = ns.HERBS_PER_DYE or 10
 
 -- The nine housing dye items. In game they are named "<Color> Housing Dye".
