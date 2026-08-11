@@ -3,70 +3,210 @@
 local ADDON, ns = ...
 
 --------------------------------------------------------------------------------
--- Data.lua — the dye, pigment and herb tables.
+-- Data.lua — the dye, shade and herb tables.
 --
--- Every ID here was READ FROM THE GAME, never guessed. Dyes and their colors come
--- from the Dye Crafting profession's own recipes (each dye's ID is the recipe
--- output; its color is the pigment that recipe consumes); pigment and herb IDs were
--- resolved in-game from their exact names. That matters because a wrong ID does two
--- kinds of damage: it mis-counts, and it can overwrite a correct one when two items
--- share a name across expansions. Anything unverified stays out.
+-- Curse of Ula'tek (12.1) rebuilt the dye system, and this file was rebuilt with
+-- it. What changed:
 --
--- The crafting chain:  10 HERBS -> 1 PIGMENT -> 1 DYE
--- (milling herbs -> pigment needs Alchemy/Inscription; the Dye Station, found in
--- the Neighborhood, converts pigment -> dye and also needs Alchemy/Inscription.)
--- Everything is grouped by COLOR: one pigment per color, many herbs per color, many
--- dyes per color. A herb can feed MORE THAN ONE color, which is why herbs carry a
--- list of colors rather than a single one — and why the flowers for a color are a
--- pool shared by every dye in that family.
+--   * Pigments are gone. There is no intermediate item any more.
+--   * The 62 dye items became NINE, one per color family: "Blue Housing Dye" and
+--     so on. Teal was retired, so the ten pigment colors become nine dyes.
+--   * Crafting is one step. Take herbs to a Dye Station, be an alchemist or a
+--     scribe, click it. There are no recipes in your crafting book at all.
+--   * The 77 color NAMES (Alliance Blue, Dark Obsidium, Petal Pink) still exist,
+--     but they are no longer items. Any Blue Housing Dye paints any blue shade,
+--     which is the whole point of the change.
 --
--- Cross-checked against the community pigment/dye chart in
--- reference/pigment-dye-chart.md.
+-- So there are now two different things that used to be one, and they are kept in
+-- two tables. ns.DYES is the nine items you stock, count and set goals against.
+-- ns.SHADES is the color names you can pick in the house, which cost a dye of
+-- their family and are otherwise just a reference list.
+--
+-- The crafting chain:  HERBS -> DYE   (ns.HERBS_PER_DYE)
+--
+-- Everything is still grouped by COLOR: many herbs per color, one dye per color,
+-- many shades per color. A herb can feed MORE THAN ONE color, which is why herbs
+-- carry a list of colors rather than a single one — and why the flowers for a
+-- color are a pool shared by every shade in that family.
+--
+-- ON UNVERIFIED DATA. The rule in this file has always been that an ID is read
+-- from the game or it doesn't ship. 12.1 is on the PTR and not on live, so some
+-- of what follows cannot be read yet. Rather than quietly guess, anything not yet
+-- confirmed is marked: item IDs are left `nil` (the name-matching in Core learns
+-- them the first time one lands in your bags), and a shade whose family is an
+-- inference carries `guess = true` so the UI can say so out loud. Clearing those
+-- flags is a PTR job, and reference/12.1-verification.md is the list.
 --------------------------------------------------------------------------------
 
--- The ten dye colors. Order here is the default display order.
+-- The nine dye colors. Order here is the default display order.
+--
+-- TEAL IS GONE. Blizzard retired the category outright: the shades that were teal
+-- moved to blue or green, and Teal Dye Pigment converted to Blue Housing Dye.
 ns.COLORS = {
 	"black", "blue", "brown", "green", "orange",
-	"purple", "red", "teal", "white", "yellow",
+	"purple", "red", "white", "yellow",
 }
 
--- One pigment per color. In game they are named "<Color> Dye Pigment"
--- (e.g. "Black Dye Pigment").
+-- How many herbs one dye costs at the station.
 --
---   key    stable identifier — NEVER change; referenced by color
+-- UNVERIFIED. It was 10 herbs -> 1 pigment -> 1 dye, so ten is the number that
+-- carries over, and Blizzard described the change as removing the middle step
+-- rather than repricing it. But they never stated a ratio, so treat this as the
+-- best available guess until someone stands at a station and counts. It's a field
+-- rather than a magic number precisely so correcting it is a one-line edit.
+ns.HERBS_PER_DYE = ns.HERBS_PER_DYE or 10
+
+-- The nine housing dye items. In game they are named "<Color> Housing Dye".
+--
+--   key    stable identifier — this is the COLOR key, because there is now exactly
+--          one dye item per color. Goals, hidden flags and prices are keyed by it.
 --   name   exact in-game name
---   id     retail item ID (number)
---   color  which color bucket it belongs to
+--   id     retail item ID (number), or nil until read from the game
+--   color  the color family, same string as the key
 --
--- Names CONFIRMED from the in-game craft list; IDs resolved in-game from those
--- names (2026-07-20). Six IDs were double-confirmed across two passes; the other
--- four resolved once the pigments were crafted/owned (recipe-book visibility alone
--- doesn't cache an item for the name->id lookup).
-ns.PIGMENTS = {
-	{ key = "black_pigment",  name = "Black Dye Pigment",  id = 262639, color = "black" },
-	{ key = "blue_pigment",   name = "Blue Dye Pigment",   id = 262643, color = "blue" },
-	{ key = "brown_pigment",  name = "Brown Dye Pigment",  id = 262642, color = "brown" },
-	{ key = "green_pigment",  name = "Green Dye Pigment",  id = 262647, color = "green" },
-	{ key = "orange_pigment", name = "Orange Dye Pigment", id = 262656, color = "orange" },
-	{ key = "purple_pigment", name = "Purple Dye Pigment", id = 262625, color = "purple" },
-	{ key = "red_pigment",    name = "Red Dye Pigment",    id = 262655, color = "red" },
-	{ key = "teal_pigment",   name = "Teal Dye Pigment",   id = 262628, color = "teal" },
-	{ key = "white_pigment",  name = "White Dye Pigment",  id = 260947, color = "white" },
-	{ key = "yellow_pigment", name = "Yellow Dye Pigment", id = 262648, color = "yellow" },
+-- IDs ARE NOT KNOWN YET — 12.1 is PTR-only, and this file does not carry guessed
+-- item IDs. `nil` is a supported state: ResolveEntry in Core matches on name and
+-- learns the ID the first time the item is seen in a bag, which is the same path
+-- that has always covered an item Blizzard adds mid-patch. Counting works from
+-- that moment on. Fill these in from the PTR and the fallback stops mattering.
+ns.DYES = {
+	{ key = "black",  name = "Black Housing Dye",  id = nil, color = "black" },
+	{ key = "blue",   name = "Blue Housing Dye",   id = nil, color = "blue" },
+	{ key = "brown",  name = "Brown Housing Dye",  id = nil, color = "brown" },
+	{ key = "green",  name = "Green Housing Dye",  id = nil, color = "green" },
+	{ key = "orange", name = "Orange Housing Dye", id = nil, color = "orange" },
+	{ key = "purple", name = "Purple Housing Dye", id = nil, color = "purple" },
+	{ key = "red",    name = "Red Housing Dye",    id = nil, color = "red" },
+	{ key = "white",  name = "White Housing Dye",  id = nil, color = "white" },
+	{ key = "yellow", name = "Yellow Housing Dye", id = nil, color = "yellow" },
 }
 
--- Every herb. A herb mills into one or more colors' pigments.
+-- Every shade you can paint a decor with: 62 that were items before 12.1, plus the
+-- 15 added in Curse of Ula'tek. These are NOT items and have no count, no price and
+-- no goal — a shade costs one dye of its family, and the family is what you stock.
+-- They're here so the window can still answer "what can I actually paint with a
+-- Blue Housing Dye", and so searching for a color name finds its family.
+--
+--   name   the color as it reads in the house customization panel (no "Dye" suffix)
+--   color  the family whose dye it costs
+--   guess  present and true when that family is INFERRED, not read from the game
+--          (see reference/12.1-verification.md)
+--
+-- The 62 old shades keep the family their dye's pigment gave them, which is solid:
+-- it was read off the recipes themselves. Three groups are marked `guess`:
+--   * the four ex-teal shades, because Blizzard said only that teal split between
+--     blue and green without saying which went where;
+--   * five of the new colors whose name doesn't name a family (Klaxxi Amber,
+--     Aethril Pink, Faded Mana, Stonetalon Brick, Petal Pink) — note there is no
+--     pink family, so both pinks have to land somewhere else;
+--   * nothing else. A color called "Verdant Green" is green.
+ns.SHADES = {
+	-- black
+	{ name = "Dark Iron",           color = "black" },
+	{ name = "Darkwood",            color = "black" },
+	{ name = "Ironclaw",            color = "black" },
+	{ name = "Obsidium Black",      color = "black" },
+	{ name = "Stormheim Grey",      color = "black" },
+	{ name = "Stormsteel",          color = "black" },
+	{ name = "Dark Obsidium",       color = "black" }, -- 12.1: the pre-12.0.5 Obsidium Black
+	-- blue
+	{ name = "Alliance Blue",       color = "blue" },
+	{ name = "Dusk Lily Grey",      color = "blue" },
+	{ name = "Midnight Blue",       color = "blue" },
+	{ name = "Nazjatar Navy",       color = "blue" },
+	{ name = "Zephras Blue",        color = "blue" },
+	{ name = "Tranquility Blue",    color = "blue" },                -- 12.1
+	{ name = "Kul Tiran Steel",     color = "blue", guess = true },  -- was teal
+	{ name = "Tidesage Teal",       color = "blue", guess = true },  -- was teal
+	{ name = "Vortex Teal",         color = "blue", guess = true },  -- was teal
+	-- brown
+	{ name = "Dark Gold",           color = "brown" },
+	{ name = "Earthen Brown",       color = "brown" },
+	{ name = "Heartwood",           color = "brown" },
+	{ name = "Kalimdor Sand",       color = "brown" },
+	{ name = "Mesquite Brown",      color = "brown" },
+	{ name = "Pale Umber",          color = "brown" },
+	{ name = "Timbermaw Brown",     color = "brown" },
+	{ name = "Vol'dun Taupe",       color = "brown" },
+	{ name = "Warm Teak",           color = "brown" },
+	{ name = "Dark Mesquite",       color = "brown" }, -- 12.1: the pre-12.0.5 Mesquite Brown
+	-- green
+	{ name = "Dustwallow Green",    color = "green" },
+	{ name = "Earthroot",           color = "green" },
+	{ name = "Emerald Dreaming",    color = "green" },
+	{ name = "Gravemoss Green",     color = "green" },
+	{ name = "Grizzly Hills Green", color = "green" },
+	{ name = "Lush Green",          color = "green" },
+	{ name = "Silversage Green",    color = "green" },
+	{ name = "Amani Green",         color = "green" },                -- 12.1
+	{ name = "Verdant Green",       color = "green" },                -- 12.1
+	{ name = "Tirisfal Green",      color = "green" },                -- 12.1
+	{ name = "Un'Goro Green",       color = "green", guess = true },  -- was teal
+	-- orange
+	{ name = "Bronze",              color = "orange" },
+	{ name = "Copper",              color = "orange" },
+	{ name = "Elwynn Pumpkin",      color = "orange" },
+	{ name = "Kodohide Brown",      color = "orange" },
+	{ name = "Foxflower Orange",    color = "orange" },               -- 12.1
+	-- purple
+	{ name = "Arcwine",             color = "purple" },
+	{ name = "Forsaken Plum",       color = "purple" },
+	{ name = "Kirin Tor Violet",    color = "purple" },
+	{ name = "Moonberry Amethyst",  color = "purple" },
+	{ name = "Netherstorm Fuchsia", color = "purple" },
+	{ name = "Nightsong Lilac",     color = "purple" },
+	{ name = "Void Violet",         color = "purple" },
+	{ name = "Aethril Pink",        color = "purple", guess = true }, -- 12.1; Aethril is a purple herb
+	{ name = "Faded Mana",          color = "purple", guess = true }, -- 12.1
+	-- red
+	{ name = "Deep Mageroyal Red",  color = "red" },
+	{ name = "Firebloom Red",       color = "red" },
+	{ name = "Gilnean Rose",        color = "red" },
+	{ name = "Hinterlands Hickory", color = "red" },
+	{ name = "Horde Red",           color = "red" },
+	{ name = "Mahogany",            color = "red" },
+	{ name = "Rain Poppy Red",      color = "red" },
+	{ name = "Ratchet Rust",        color = "red" },
+	{ name = "Dusty Red",           color = "red" },                  -- 12.1
+	{ name = "Dark Mahogany",       color = "red" },                  -- 12.1: the pre-12.0.5 Mahogany
+	{ name = "Stonetalon Brick",    color = "red", guess = true },    -- 12.1
+	{ name = "Petal Pink",          color = "red", guess = true },    -- 12.1; no pink family to put it in
+	-- white
+	{ name = "Basic Birch",         color = "white" },
+	{ name = "Bone-White",          color = "white" },
+	{ name = "Highborne Marble",    color = "white" },
+	{ name = "Highland Birch",      color = "white" },
+	{ name = "Pearl White",         color = "white" },                -- 12.1
+	-- yellow
+	{ name = "Brass",               color = "yellow" },
+	{ name = "Gold",                color = "yellow" },
+	{ name = "Holy Oak Tan",        color = "yellow" },
+	{ name = "Pinewood",            color = "yellow" },
+	{ name = "Sandfury Yellow",     color = "yellow" },
+	{ name = "Savannah Gold",       color = "yellow" },
+	{ name = "Sungrass Yellow",     color = "yellow" },
+	{ name = "Zandalari Gold",      color = "yellow" },
+	{ name = "Klaxxi Amber",        color = "yellow", guess = true }, -- 12.1
+}
+
+-- Every herb. A herb turns into one or more colors' dyes at the station.
 --
 --   key     stable identifier
 --   name    exact in-game name
 --   id      retail item ID (number)
---   colors  list of color keys this herb mills into (the chart's columns it sits in)
---   expac   expansion label, tooltip only
+--   colors  list of color keys this herb makes dye for
 --
 -- Several herbs appear under more than one color (Writhebark feeds black, brown AND
 -- orange), and several have one entry per quality tier sharing a name. Both are
 -- deliberate: the tiers count separately because they're separate items, but they
 -- hide together in the options, by name.
+--
+-- The IDs and the color groupings were read from the game before 12.1, off the
+-- pigment each herb milled into. Removing the pigment step doesn't change which
+-- herbs are which color, so they carry over — EXCEPT that every herb that fed teal
+-- now feeds blue, because that's where the teal pigment itself converted to.
+-- Tranquility Bloom is the tell: it was a teal/white herb, and 12.1's new blue is
+-- called Tranquility Blue.
 ns.HERBS = {
 	{ key = "adderstongue_36903",      name = "Adder's Tongue",      id = 36903, colors = { "brown", "green" } },
 	{ key = "akundasbite_152507",      name = "Akunda's Bite",       id = 152507, colors = { "blue" } },
@@ -82,7 +222,7 @@ ns.HERBS = {
 	{ key = "blessingblossom_210806",  name = "Blessing Blossom",    id = 210806, colors = { "black", "green" } },
 	{ key = "blessingblossom_210807",  name = "Blessing Blossom",    id = 210807, colors = { "black", "green" } },
 	{ key = "briarthorn_2450",         name = "Briarthorn",          id = 2450, colors = { "brown" } },
-	{ key = "bruiseweed_2453",         name = "Bruiseweed",          id = 2453, colors = { "teal" } },
+	{ key = "bruiseweed_2453",         name = "Bruiseweed",          id = 2453, colors = { "blue" } },
 	{ key = "bubblepoppy_191467",      name = "Bubble Poppy",        id = 191467, colors = { "blue", "green" } },
 	{ key = "bubblepoppy_191468",      name = "Bubble Poppy",        id = 191468, colors = { "blue", "green" } },
 	{ key = "bubblepoppy_191469",      name = "Bubble Poppy",        id = 191469, colors = { "blue", "green" } },
@@ -102,21 +242,21 @@ ns.HERBS = {
 	{ key = "greentealeaf_72234",      name = "Green Tea Leaf",      id = 72234, colors = { "green", "yellow" } },
 	{ key = "icethorn_36906",          name = "Icethorn",            id = 36906, colors = { "blue", "white" } },
 	{ key = "kingsblood_3356",         name = "Kingsblood",          id = 3356, colors = { "purple" } },
-	{ key = "lichbloom_36905",         name = "Lichbloom",           id = 36905, colors = { "black", "teal" } },
+	{ key = "lichbloom_36905",         name = "Lichbloom",           id = 36905, colors = { "black", "blue" } },
 	{ key = "luredrop_210799",         name = "Luredrop",            id = 210799, colors = { "blue", "orange" } },
 	{ key = "luredrop_210800",         name = "Luredrop",            id = 210800, colors = { "blue", "orange" } },
 	{ key = "luredrop_210801",         name = "Luredrop",            id = 210801, colors = { "blue", "orange" } },
 	{ key = "mageroyal_785",           name = "Mageroyal",           id = 785, colors = { "red" } },
 	{ key = "manalily_236778",         name = "Mana Lily",           id = 236778, colors = { "red", "yellow" } },
 	{ key = "manalily_236779",         name = "Mana Lily",           id = 236779, colors = { "red", "yellow" } },
-	{ key = "marrowroot_168589",       name = "Marrowroot",          id = 168589, colors = { "brown", "teal" } },
+	{ key = "marrowroot_168589",       name = "Marrowroot",          id = 168589, colors = { "brown", "blue" } },
 	{ key = "mycobloom_210796",        name = "Mycobloom",           id = 210796, colors = { "brown", "white" } },
 	{ key = "mycobloom_210797",        name = "Mycobloom",           id = 210797, colors = { "brown", "white" } },
 	{ key = "mycobloom_210798",        name = "Mycobloom",           id = 210798, colors = { "brown", "white" } },
 	{ key = "nagrandarrowbloom_109128", name = "Nagrand Arrowbloom",  id = 109128, colors = { "black", "green" } },
-	{ key = "orbinid_210802",          name = "Orbinid",             id = 210802, colors = { "purple", "teal" } },
-	{ key = "orbinid_210803",          name = "Orbinid",             id = 210803, colors = { "purple", "teal" } },
-	{ key = "orbinid_210804",          name = "Orbinid",             id = 210804, colors = { "purple", "teal" } },
+	{ key = "orbinid_210802",          name = "Orbinid",             id = 210802, colors = { "purple", "blue" } },
+	{ key = "orbinid_210803",          name = "Orbinid",             id = 210803, colors = { "purple", "blue" } },
+	{ key = "orbinid_210804",          name = "Orbinid",             id = 210804, colors = { "purple", "blue" } },
 	{ key = "peacebloom_2447",         name = "Peacebloom",          id = 2447, colors = { "white" } },
 	{ key = "risingglory_168586",      name = "Rising Glory",        id = 168586, colors = { "white", "yellow" } },
 	{ key = "riverbud_152505",         name = "Riverbud",            id = 152505, colors = { "black", "green" } },
@@ -124,37 +264,37 @@ ns.HERBS = {
 	{ key = "saxifrage_191465",        name = "Saxifrage",           id = 191465, colors = { "red", "white", "yellow" } },
 	{ key = "saxifrage_191466",        name = "Saxifrage",           id = 191466, colors = { "red", "white", "yellow" } },
 	{ key = "seastalk_152511",         name = "Sea Stalk",           id = 152511, colors = { "brown", "yellow" } },
-	{ key = "silkweed_72235",          name = "Silkweed",            id = 72235, colors = { "blue", "teal" } },
+	{ key = "silkweed_72235",          name = "Silkweed",            id = 72235, colors = { "blue" } },
 	{ key = "silverleaf_765",          name = "Silverleaf",          id = 765, colors = { "blue" } },
-	{ key = "stormvine_52984",         name = "Stormvine",           id = 52984, colors = { "blue", "teal" } },
+	{ key = "stormvine_52984",         name = "Stormvine",           id = 52984, colors = { "blue" } },
 	{ key = "sungrass_8838",           name = "Sungrass",            id = 8838, colors = { "yellow" } },
 	{ key = "swiftthistle_2452",       name = "Swiftthistle",        id = 2452, colors = { "green" } },
-	{ key = "terocone_22789",          name = "Terocone",            id = 22789, colors = { "blue", "teal" } },
+	{ key = "terocone_22789",          name = "Terocone",            id = 22789, colors = { "blue" } },
 	{ key = "whiptail_52988",          name = "Whiptail",            id = 52988, colors = { "white", "yellow" } },
 	{ key = "writhebark_191470",       name = "Writhebark",          id = 191470, colors = { "black", "brown", "orange" } },
 	{ key = "writhebark_191471",       name = "Writhebark",          id = 191471, colors = { "black", "brown", "orange" } },
 	{ key = "writhebark_191472",       name = "Writhebark",          id = 191472, colors = { "black", "brown", "orange" } },
-	{ key = "yserallineseed_128304",   name = "Yseralline Seed",     id = 128304, colors = { "black", "teal" } },
+	{ key = "yserallineseed_128304",   name = "Yseralline Seed",     id = 128304, colors = { "black", "blue" } },
 	{ key = "herb_109125", name = "Fireweed", id = 109125, colors = { "orange", "red" } },
-	{ key = "herb_109127", name = "Starflower", id = 109127, colors = { "teal" } },
+	{ key = "herb_109127", name = "Starflower", id = 109127, colors = { "blue" } },
 	{ key = "herb_109129", name = "Talador Orchid", id = 109129, colors = { "purple", "white" } },
 	{ key = "herb_124101", name = "Aethril", id = 124101, colors = { "purple" } },
 	{ key = "herb_151565", name = "Astral Glory", id = 151565, colors = { "red" } },
 	{ key = "herb_152506", name = "Star Moss", id = 152506, colors = { "red" } },
 	{ key = "herb_152508", name = "Winter's Kiss", id = 152508, colors = { "white" } },
-	{ key = "herb_152509", name = "Siren's Pollen", id = 152509, colors = { "orange", "teal" } },
+	{ key = "herb_152509", name = "Siren's Pollen", id = 152509, colors = { "orange", "blue" } },
 	{ key = "herb_168487", name = "Zin'anthid", id = 168487, colors = { "purple" } },
 	{ key = "herb_168583", name = "Widowbloom", id = 168583, colors = { "orange", "red" } },
 	{ key = "herb_170554", name = "Vigil's Torch", id = 170554, colors = { "green", "purple" } },
-	{ key = "herb_191460", name = "Hochenblume", id = 191460, colors = { "purple", "teal" } },
-	{ key = "herb_191461", name = "Hochenblume", id = 191461, colors = { "purple", "teal" } },
-	{ key = "herb_191462", name = "Hochenblume", id = 191462, colors = { "purple", "teal" } },
+	{ key = "herb_191460", name = "Hochenblume", id = 191460, colors = { "purple", "blue" } },
+	{ key = "herb_191461", name = "Hochenblume", id = 191461, colors = { "purple", "blue" } },
+	{ key = "herb_191462", name = "Hochenblume", id = 191462, colors = { "purple", "blue" } },
 	{ key = "herb_22787", name = "Ragveil", id = 22787, colors = { "white" } },
 	{ key = "herb_22791", name = "Netherbloom", id = 22791, colors = { "red" } },
 	{ key = "herb_22792", name = "Nightmare Vine", id = 22792, colors = { "orange" } },
 	{ key = "herb_22793", name = "Mana Thistle", id = 22793, colors = { "purple" } },
-	{ key = "herb_236761", name = "Tranquility Bloom", id = 236761, colors = { "teal", "white" } },
-	{ key = "herb_236767", name = "Tranquility Bloom", id = 236767, colors = { "teal", "white" } },
+	{ key = "herb_236761", name = "Tranquility Bloom", id = 236761, colors = { "blue", "white" } },
+	{ key = "herb_236767", name = "Tranquility Bloom", id = 236767, colors = { "blue", "white" } },
 	{ key = "herb_236770", name = "Sanguithorn", id = 236770, colors = { "green", "orange" } },
 	{ key = "herb_236771", name = "Sanguithorn", id = 236771, colors = { "green", "orange" } },
 	{ key = "herb_36904", name = "Tiger Lily", id = 36904, colors = { "red" } },
@@ -164,89 +304,4 @@ ns.HERBS = {
 	{ key = "herb_72237", name = "Rain Poppy", id = 72237, colors = { "orange", "red" } },
 	{ key = "herb_79010", name = "Snow Lily", id = 79010, colors = { "white" } },
 	{ key = "herb_79011", name = "Fool's Cap", id = 79011, colors = { "purple" } },
-}
-
--- Every dye. Each dye is made from one pigment of its color.
---
---   key    stable identifier — referenced by goals and saved variables
---   name   exact in-game name
---   id     retail item ID (number)
---   color  the dye's color (selects its pigment)
---
--- Sourced authoritatively from the "Dye Crafting" profession recipes, read in-game
--- (2026-07-20): every dye's ID is the recipe output, and its color is read from the
--- pigment the recipe consumes — nothing guessed. 62 dyes.
-ns.DYES = {
-	-- black
-	{ key = "darkiron",           name = "Dark Iron Dye",           id = 259109, color = "black" },
-	{ key = "darkwood",           name = "Darkwood Dye",            id = 259098, color = "black" },
-	{ key = "ironclaw",           name = "Ironclaw Dye",            id = 259111, color = "black" },
-	{ key = "obsidiumblack",      name = "Obsidium Black Dye",      id = 259121, color = "black" },
-	{ key = "stormheimgrey",      name = "Stormheim Grey Dye",      id = 259123, color = "black" },
-	{ key = "stormsteel",         name = "Stormsteel Dye",          id = 259104, color = "black" },
-	-- blue
-	{ key = "allianceblue",       name = "Alliance Blue Dye",       id = 259115, color = "blue" },
-	{ key = "dusklilygrey",       name = "Dusk Lily Grey Dye",      id = 259153, color = "blue" },
-	{ key = "midnightblue",       name = "Midnight Blue Dye",       id = 259135, color = "blue" },
-	{ key = "nazjatarnavy",       name = "Nazjatar Navy Dye",       id = 259146, color = "blue" },
-	{ key = "zephrasblue",        name = "Zephras Blue Dye",        id = 259129, color = "blue" },
-	-- brown
-	{ key = "darkgold",           name = "Dark Gold Dye",           id = 259112, color = "brown" },
-	{ key = "earthenbrown",       name = "Earthen Brown Dye",       id = 259122, color = "brown" },
-	{ key = "heartwood",          name = "Heartwood Dye",           id = 259103, color = "brown" },
-	{ key = "kalimdorsand",       name = "Kalimdor Sand Dye",       id = 259128, color = "brown" },
-	{ key = "mesquitebrown",      name = "Mesquite Brown Dye",      id = 259096, color = "brown" },
-	{ key = "paleumber",          name = "Pale Umber Dye",          id = 259101, color = "brown" },
-	{ key = "timbermawbrown",     name = "Timbermaw Brown Dye",     id = 259145, color = "brown" },
-	{ key = "volduntaupe",        name = "Vol'dun Taupe Dye",       id = 259141, color = "brown" },
-	{ key = "warmteak",           name = "Warm Teak Dye",           id = 259053, color = "brown" },
-	-- green
-	{ key = "dustwallowgreen",    name = "Dustwallow Green Dye",    id = 259133, color = "green" },
-	{ key = "earthroot",          name = "Earthroot Dye",           id = 259150, color = "green" },
-	{ key = "emeralddreaming",    name = "Emerald Dreaming Dye",    id = 259134, color = "green" },
-	{ key = "gravemossgreen",     name = "Gravemoss Green Dye",     id = 259143, color = "green" },
-	{ key = "grizzlyhillsgreen",  name = "Grizzly Hills Green Dye", id = 259147, color = "green" },
-	{ key = "lushgreen",          name = "Lush Green Dye",          id = 259114, color = "green" },
-	{ key = "silversagegreen",    name = "Silversage Green Dye",    id = 259124, color = "green" },
-	-- orange
-	{ key = "bronze",             name = "Bronze Dye",              id = 259108, color = "orange" },
-	{ key = "copper",             name = "Copper Dye",              id = 259105, color = "orange" },
-	{ key = "elwynnpumpkin",      name = "Elwynn Pumpkin Dye",      id = 259118, color = "orange" },
-	{ key = "kodohidebrown",      name = "Kodohide Brown Dye",      id = 259132, color = "orange" },
-	-- purple
-	{ key = "arcwine",            name = "Arcwine Dye",             id = 259131, color = "purple" },
-	{ key = "forsakenplum",       name = "Forsaken Plum Dye",       id = 259144, color = "purple" },
-	{ key = "kirintorviolet",     name = "Kirin Tor Violet Dye",    id = 259116, color = "purple" },
-	{ key = "moonberryamethyst",  name = "Moonberry Amethyst Dye",  id = 259140, color = "purple" },
-	{ key = "netherstormfuchsia", name = "Netherstorm Fuchsia Dye", id = 259119, color = "purple" },
-	{ key = "nightsonglilac",     name = "Nightsong Lilac Dye",     id = 259130, color = "purple" },
-	{ key = "voidviolet",         name = "Void Violet Dye",         id = 259126, color = "purple" },
-	-- red
-	{ key = "deepmageroyalred",   name = "Deep Mageroyal Red Dye",  id = 259151, color = "red" },
-	{ key = "firebloomred",       name = "Firebloom Red Dye",       id = 259127, color = "red" },
-	{ key = "gilneanrose",        name = "Gilnean Rose Dye",        id = 259139, color = "red" },
-	{ key = "hinterlandshickory", name = "Hinterlands Hickory Dye", id = 259152, color = "red" },
-	{ key = "hordered",           name = "Horde Red Dye",           id = 259113, color = "red" },
-	{ key = "mahogany",           name = "Mahogany Dye",            id = 259102, color = "red" },
-	{ key = "rainpoppyred",       name = "Rain Poppy Red Dye",      id = 259154, color = "red" },
-	{ key = "ratchetrust",        name = "Ratchet Rust Dye",        id = 259142, color = "red" },
-	-- teal
-	{ key = "kultiransteel",      name = "Kul Tiran Steel Dye",     id = 259110, color = "teal" },
-	{ key = "tidesageteal",       name = "Tidesage Teal Dye",       id = 259148, color = "teal" },
-	{ key = "ungorogreen",        name = "Un'Goro Green Dye",       id = 259125, color = "teal" },
-	{ key = "vortexteal",         name = "Vortex Teal Dye",         id = 259136, color = "teal" },
-	-- white
-	{ key = "basicbirch",         name = "Basic Birch Dye",         id = 259078, color = "white" },
-	{ key = "bonewhite",          name = "Bone-White Dye",          id = 259120, color = "white" },
-	{ key = "highbornemarble",    name = "Highborne Marble Dye",    id = 259149, color = "white" },
-	{ key = "highlandbirch",      name = "Highland Birch Dye",      id = 259099, color = "white" },
-	-- yellow
-	{ key = "brass",              name = "Brass Dye",               id = 259107, color = "yellow" },
-	{ key = "gold",               name = "Gold Dye",                id = 258838, color = "yellow" },
-	{ key = "holyoaktan",         name = "Holy Oak Tan Dye",        id = 259100, color = "yellow" },
-	{ key = "pinewood",           name = "Pinewood Dye",            id = 259097, color = "yellow" },
-	{ key = "sandfuryyellow",     name = "Sandfury Yellow Dye",     id = 259117, color = "yellow" },
-	{ key = "savannahgold",       name = "Savannah Gold Dye",       id = 259138, color = "yellow" },
-	{ key = "sungrassyellow",     name = "Sungrass Yellow Dye",     id = 259137, color = "yellow" },
-	{ key = "zandalarigold",      name = "Zandalari Gold Dye",      id = 259106, color = "yellow" },
 }

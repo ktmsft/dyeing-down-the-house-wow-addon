@@ -164,10 +164,10 @@ end
 -- Which items a price update covers. Same rules as the AH scan queue in Core:
 -- flowers only. Warband-bound dyes have no market to have a price in, so TSM and
 -- Auctionator have nothing to say about them either — asking would just spend the
--- pass filing `nil` against every dye. Pigments are an intermediate nobody trades
--- to make a decision, and hidden flowers aren't on screen so aren't worth a lookup.
+-- pass filing `nil` against every dye. Hidden flowers aren't on screen, so they
+-- aren't worth a lookup either.
 function ns.ShouldPriceEntry(entry)
-	if not entry.id or entry.kind == "pigment" then return false end
+	if not entry.id then return false end
 	if not ns.IsTradeable(entry) then return false end
 	if entry.kind == "dye" and ns.IsDyeHidden(entry.key) then return false end
 	if entry.kind == "herb" and ns.IsHerbHidden(entry.name) then return false end

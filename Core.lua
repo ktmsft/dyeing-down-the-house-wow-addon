@@ -5,28 +5,32 @@ local ADDON, ns = ...
 --------------------------------------------------------------------------------
 -- Lookups
 --
--- The crafting chain is: 10 HERBS -> 1 PIGMENT -> 1 DYE, and everything is grouped
--- by COLOR. Each color has one pigment; every herb of that color mills into it,
--- and every dye of that color is made from it. All three are real items that live
--- in bags, bank and the Warband bank, so the scanning and counting machinery works
--- over the UNION of all of them (ns.ITEMS). The per-kind views stay available as
--- ns.DYES / ns.PIGMENTS / ns.HERBS, and the color groupings as ns.pigmentByColor
--- and ns.herbsByColor for the recipe engine.
+-- The crafting chain is: HERBS -> DYE, and everything is grouped by COLOR. Each
+-- color has exactly one dye item, and every herb of that color turns into it at a
+-- Dye Station. Both are real items that live in bags, bank and the Warband bank,
+-- so the scanning and counting machinery works over the UNION of them (ns.ITEMS).
+-- The per-kind views stay available as ns.DYES / ns.HERBS, and the color grouping
+-- as ns.herbsByColor for the recipe engine.
+--
+-- 12.1 removed the pigment step and collapsed 62 dye items into nine, so a dye's
+-- key IS its color key — the two used to be different things and are now the same
+-- thing, which is why so much of what follows got shorter. The color NAMES live on
+-- in ns.SHADES, but they aren't items and nothing here counts them.
 --------------------------------------------------------------------------------
 
--- Conversion constants, from the chart. Kept as fields (not magic numbers) so a
--- balance change is a one-line edit, and so the recipe engine reads clearly.
-ns.HERBS_PER_PIGMENT = ns.HERBS_PER_PIGMENT or 10
-ns.PIGMENTS_PER_DYE  = ns.PIGMENTS_PER_DYE  or 1
+-- How many herbs one dye costs. Lives in Data.lua next to the note about it being
+-- unconfirmed for 12.1; aliased here so the recipe engine reads clearly and so a
+-- balance change stays a one-line edit.
+ns.HERBS_PER_DYE = ns.HERBS_PER_DYE or 10
 
 -- Dyes went Warband-bound in the 4 Aug 2026 patch, ahead of 12.1: they can no
 -- longer be traded or listed, so a dye has no buy price at all any more. Flowers
--- and pigments are unchanged and still sell normally.
+-- are unchanged and still sell normally.
 --
 -- One flag rather than a dozen scattered `kind == "dye"` checks, because everything
 -- downstream has to agree with it: the scan queue, the price import, the Cost
--- column, and the reagent-picker marks. If Blizzard ever reverses this, flipping it
--- back to true restores the old craft-vs-buy behaviour everywhere at once.
+-- column, and the station marks. If Blizzard ever reverses this, flipping it back
+-- to true restores the old craft-vs-buy behaviour everywhere at once.
 ns.DYES_TRADEABLE = false
 
 -- Can this item be bought or sold at all? Takes an entry or an item key.
@@ -41,15 +45,15 @@ ns.byID = {}
 ns.byName = {}
 ns.byKey = {}
 ns.ITEMS = {}
-ns.pigmentByColor = {}
 ns.herbsByColor = {}
+ns.shadesByColor = {}
 
--- Rebuilt from ns.DYES / ns.PIGMENTS / ns.HERBS. Exposed so the test harness can
+-- Rebuilt from ns.DYES / ns.HERBS / ns.SHADES. Exposed so the test harness can
 -- swap in a fixture dataset and rebuild, the same way the real Data.lua drives it
 -- at load.
 function ns.RebuildLookups()
 	ns.byID, ns.byName, ns.byKey, ns.ITEMS = {}, {}, {}, {}
-	ns.pigmentByColor, ns.herbsByColor = {}, {}
+	ns.herbsByColor, ns.shadesByColor = {}, {}
 
 	local function add(entry, kind)
 		entry.kind = kind
@@ -63,20 +67,27 @@ function ns.RebuildLookups()
 	end
 
 	for _, dye in ipairs(ns.DYES or {}) do add(dye, "dye") end
-	for _, pigment in ipairs(ns.PIGMENTS or {}) do
-		add(pigment, "pigment")
-		if pigment.color then ns.pigmentByColor[pigment.color] = pigment end
-	end
 	for _, herb in ipairs(ns.HERBS or {}) do
 		add(herb, "herb")
-		-- A herb can mill into more than one color's pigment (the chart's overlaps),
-		-- so it may appear in several color buckets. `colors` is the list; `color`
-		-- is accepted as a one-color shorthand.
+		-- A herb can turn into more than one color's dye, so it may appear in several
+		-- color buckets. `colors` is the list; `color` is accepted as a one-color
+		-- shorthand.
 		herb.colors = herb.colors or (herb.color and { herb.color }) or {}
 		for _, color in ipairs(herb.colors) do
 			local list = ns.herbsByColor[color]
 			if not list then list = {}; ns.herbsByColor[color] = list end
 			list[#list + 1] = herb
+		end
+	end
+
+	-- Shades are NOT items and deliberately never reach `add`: nothing counts them,
+	-- prices them or scans for them. They're grouped by family for the expand view
+	-- and for the search, and that's all they do.
+	for _, shade in ipairs(ns.SHADES or {}) do
+		if shade.color then
+			local list = ns.shadesByColor[shade.color]
+			if not list then list = {}; ns.shadesByColor[shade.color] = list end
+			list[#list + 1] = shade
 		end
 	end
 end
@@ -105,7 +116,9 @@ ns.OpenOptions     = ns.OpenOptions     or function() end
 --------------------------------------------------------------------------------
 
 -- 2: dyes went Warband-bound, so every stored dye price is now junk (see Migrate).
-local DB_VERSION = 2
+-- 3: 12.1 replaced 62 dye items and 10 pigments with nine, so every key that named
+--    one of them has to be rewritten to its color (see Migrate).
+local DB_VERSION = 3
 
 local defaults = {
 	version = DB_VERSION,
@@ -142,24 +155,20 @@ local defaults = {
 		search = "",       -- name filter
 		sort = "alpha",    -- see VALID_SORT
 		sortDir = "asc",   -- "asc" | "desc"
-		-- Which view is on top. "family" groups by color family and answers "what can
-		-- I make"; "dye" is the flat per-dye list and answers "how am I doing on this
-		-- particular dye". They want genuinely different columns, so they're tabs
-		-- rather than one compromised table.
-		tab = "family",           -- "family" | "dye"
-		groupSort = "color",      -- family tab: color | pigment | flowers | makeable | short
-		groupSortDir = "asc",
-		-- Optional columns on the DYE tab. Dye + Have are always shown.
-		cols = { pigment = true, flowers = true, value = true, goal = true },
-		expanded = {},       -- [dyeKey] = true, dye rows opened to show their flowers
-		expandedColors = {}, -- [color] = true, color groups opened on the family tab
+		-- The two tabs are gone. They existed because pigments and flowers belonged to
+		-- a COLOR while dyes were 62 separate items, so "what can I make" and "how am I
+		-- doing on this dye" wanted different columns. 12.1 made a dye a color, which
+		-- makes those the same question — one list of nine, and the shades a family
+		-- covers are what you get when you open a row.
+		-- Optional columns. Color + Have are always shown.
+		cols = { flowers = true, makeable = true, value = true, goal = true },
+		expanded = {},   -- [color] = true, color rows opened to show flowers and shades
 		hideCostlyFlowers = false, -- in the expand view, show only the cheapest flower(s) of a color
-		hiddenDyes = {}, -- [dyeKey] = true, dyes the player unchecked (hidden from the list)
+		hiddenDyes = {}, -- [color] = true, families the player unchecked (hidden from the list)
 		hiddenHerbs = {}, -- [herbNameLower] = true, flowers hidden from the expand view
 		rainbowTitle = true, -- flashy rainbow name (off = plain)
 		housingGoalInput = true, -- show the "Dye Needed" box in the house dye panel
-		markHerbs = true, -- green check / red X on herbs in the pigment reagent picker
-		                  -- (check = cheapest flower for that color, see GetHerbCraftVerdict)
+		showShades = true, -- list a family's color names when its row is opened
 	},
 }
 
@@ -173,6 +182,68 @@ local function ApplyDefaults(target, source)
 		end
 	end
 end
+
+-- Every pre-12.1 dye key, and the color it becomes.
+--
+-- This and its pigment twin below are the ONLY place the old 62 dyes and 10
+-- pigments still exist, and they are migration data rather than game data — which
+-- is why they're here and not in Data.lua. Nothing reads them after the upgrade
+-- has run once.
+--
+-- The four ex-teal shades follow Data.lua's reading of the split (Un'Goro Green to
+-- green, the rest to blue). Getting one of those four wrong moves a goal between
+-- two families, which is worth far less than losing it.
+local LEGACY_DYE_COLOR = {
+	darkiron = "black", darkwood = "black", ironclaw = "black",
+	obsidiumblack = "black", stormheimgrey = "black", stormsteel = "black",
+	allianceblue = "blue", dusklilygrey = "blue", midnightblue = "blue",
+	nazjatarnavy = "blue", zephrasblue = "blue",
+	darkgold = "brown", earthenbrown = "brown", heartwood = "brown",
+	kalimdorsand = "brown", mesquitebrown = "brown", paleumber = "brown",
+	timbermawbrown = "brown", volduntaupe = "brown", warmteak = "brown",
+	dustwallowgreen = "green", earthroot = "green", emeralddreaming = "green",
+	gravemossgreen = "green", grizzlyhillsgreen = "green", lushgreen = "green",
+	silversagegreen = "green",
+	bronze = "orange", copper = "orange", elwynnpumpkin = "orange",
+	kodohidebrown = "orange",
+	arcwine = "purple", forsakenplum = "purple", kirintorviolet = "purple",
+	moonberryamethyst = "purple", netherstormfuchsia = "purple",
+	nightsonglilac = "purple", voidviolet = "purple",
+	deepmageroyalred = "red", firebloomred = "red", gilneanrose = "red",
+	hinterlandshickory = "red", hordered = "red", mahogany = "red",
+	rainpoppyred = "red", ratchetrust = "red",
+	basicbirch = "white", bonewhite = "white", highbornemarble = "white",
+	highlandbirch = "white",
+	brass = "yellow", gold = "yellow", holyoaktan = "yellow", pinewood = "yellow",
+	sandfuryyellow = "yellow", savannahgold = "yellow", sungrassyellow = "yellow",
+	zandalarigold = "yellow",
+	-- the retired teal family
+	kultiransteel = "blue", tidesageteal = "blue", vortexteal = "blue",
+	ungorogreen = "green",
+}
+
+-- The ten pigments, kept SEPARATE from the dyes above.
+--
+-- Most of the migration treats the two the same — a stored count or price keyed by
+-- either is equally dead. The hide list is the exception, and it's the reason for
+-- the split: hiding was a per-dye choice, so a pigment key was never in hiddenDyes.
+-- Folded in with the dyes it would count as "this family had a visible member" for
+-- every family, and the AND-fold below would quietly throw the player's whole hide
+-- list away.
+--
+-- Teal pigment goes to blue because Blizzard said so outright: it converts to Blue
+-- Housing Dye.
+local LEGACY_PIGMENT_COLOR = {
+	black_pigment = "black", blue_pigment = "blue", brown_pigment = "brown",
+	green_pigment = "green", orange_pigment = "orange", purple_pigment = "purple",
+	red_pigment = "red", white_pigment = "white", yellow_pigment = "yellow",
+	teal_pigment = "blue",
+}
+
+-- Either kind, for everything that doesn't care which it was.
+local LEGACY_KEY_COLOR = {}
+for key, color in pairs(LEGACY_DYE_COLOR) do LEGACY_KEY_COLOR[key] = color end
+for key, color in pairs(LEGACY_PIGMENT_COLOR) do LEGACY_KEY_COLOR[key] = color end
 
 -- Bring an older saved profile up to date. Runs after ApplyDefaults, so anything
 -- new already exists; this is only for values that are now WRONG rather than
@@ -191,6 +262,90 @@ local function Migrate(db)
 		end
 		-- This profile watched its dye prices vanish, so it gets told why.
 		db.warbandNoticePending = true
+	end
+
+	-- v2 -> v3: 12.1 replaced 62 dye items and 10 pigments with nine dyes, one per
+	-- color. Every key naming one of them now names nothing, so each has to be
+	-- rewritten to its color or dropped. What happens to each kind of value differs,
+	-- and the difference is the whole point of doing this by hand:
+	--
+	--   GOALS are the player's intent and are FOLDED, by adding them up. Wanting 5
+	--   Alliance Blue and 3 Midnight Blue is wanting 8 Blue Housing Dye, which is
+	--   also exactly what Hestia's mail does to the items themselves. Losing
+	--   someone's goals to a schema change is the one outcome worth real effort to
+	--   avoid.
+	--
+	--   COUNTS are DROPPED, not folded. The old items no longer exist and the new
+	--   ones arrive by mail the player has to collect, so a folded count claims dyes
+	--   that aren't in the bags yet. Bags rescan on login and the bank on its next
+	--   visit; until then this reads low. That's the house rule from ReconcileLive —
+	--   briefly under-reporting beats inflating from a partial view.
+	--
+	--   PRICES are dropped outright. Dye prices went in v2; pigments no longer exist
+	--   to have one.
+	--
+	--   HIDDEN families are folded with AND, not OR: a family disappears only if
+	--   every single one of its old shades was unticked. Otherwise unticking one
+	--   shade of black would have silently hidden all of black.
+	if from < 3 then
+		local goals, hidden = {}, {}
+		local hiddenSeen, shownSeen = {}, {}
+
+		for key, value in pairs(db.goals or {}) do
+			local color = LEGACY_KEY_COLOR[key] or (ns.byKey[key] and ns.byKey[key].color)
+			if color then goals[color] = (goals[color] or 0) + (tonumber(value) or 0) end
+		end
+		db.goals = goals
+
+		-- Dye keys only. See LEGACY_PIGMENT_COLOR for why mixing them in here would
+		-- wipe the hide list rather than migrate it.
+		local ui = db.ui or {}
+		for key, color in pairs(LEGACY_DYE_COLOR) do
+			if (ui.hiddenDyes or {})[key] then hiddenSeen[color] = true
+			else shownSeen[color] = true end
+		end
+		for color in pairs(hiddenSeen) do
+			if not shownSeen[color] then hidden[color] = true end
+		end
+		ui.hiddenDyes = hidden
+
+		-- Rows opened, and the old family tab's separately-tracked open colors, are one
+		-- table now. Teal folds into blue with everything else.
+		local expanded = {}
+		for key in pairs(ui.expanded or {}) do
+			local color = LEGACY_KEY_COLOR[key]
+			if color then expanded[color] = true end
+		end
+		for color in pairs(ui.expandedColors or {}) do
+			expanded[LEGACY_KEY_COLOR[color .. "_pigment"] or color] = true
+		end
+		ui.expanded, ui.expandedColors = expanded, nil
+
+		-- Tabs and the pigment column are gone; leaving them behind would quietly
+		-- re-apply a layout that no longer exists.
+		ui.tab, ui.groupSort, ui.groupSortDir = nil, nil, nil
+		if type(ui.cols) == "table" then ui.cols.pigment = nil end
+
+		for key in pairs(db.prices or {}) do
+			if LEGACY_KEY_COLOR[key] then db.prices[key] = nil end
+		end
+
+		local function StripCounts(t)
+			if type(t) ~= "table" then return end
+			for key in pairs(t) do
+				if LEGACY_KEY_COLOR[key] then t[key] = nil end
+			end
+		end
+		StripCounts(db.warband)
+		for _, char in pairs(db.chars or {}) do
+			StripCounts(char.bags)
+			StripCounts(char.bank)
+		end
+
+		-- IDs learned by name-matching pointed at items that have been deleted.
+		for key in pairs(db.learned or {}) do
+			if LEGACY_KEY_COLOR[key] then db.learned[key] = nil end
+		end
 	end
 
 	db.version = DB_VERSION
@@ -917,7 +1072,8 @@ end
 --     so querying one is a guaranteed empty result — and on a rate-limited API,
 --     spending half the run's queries on items that cannot have a price is worse
 --     than useless: it's what pushes the flowers we DO need past the limiter.
---     Pigments were already skipped as an intermediate nobody trades to decide.
+--     (Pigments used to be skipped here too, as an intermediate nobody trades to
+--     decide. 12.1 deleted them, so there's nothing left to skip.)
 --   * flowers the player has unchecked in the config are skipped too — if they
 --     aren't shown, there's no reason to spend a query pricing them;
 --   * each id appears at most once.
@@ -926,7 +1082,7 @@ function ns.BuildScanQueue(items)
 	for _, entry in ipairs(items or ns.ITEMS) do
 		local hidden = (entry.kind == "dye" and ns.IsDyeHidden(entry.key))
 			or (entry.kind == "herb" and ns.IsHerbHidden(entry.name))
-		if entry.id and entry.kind ~= "pigment" and ns.IsTradeable(entry)
+		if entry.id and ns.IsTradeable(entry)
 			and not hidden and not seen[entry.id] then
 			seen[entry.id] = true
 			queue[#queue + 1] = entry.id
@@ -1008,33 +1164,35 @@ scanFrame:SetScript("OnEvent", function(_, event, arg1)
 end)
 
 --------------------------------------------------------------------------------
--- Recipes — the 10 herbs -> 1 pigment -> 1 dye chain
+-- Recipes — the herbs -> dye chain
 --
--- Each dye is made from one PIGMENT of the dye's color; each pigment is milled
--- from HERBS of that color. Herbs of a color form a fungible pool — any herb of
--- the color mills into that color's pigment — so the useful figure is the total
--- herb count for the color, not per-herb.
+-- A dye is made from HERBS of its color, in one step at a Dye Station. Herbs of a
+-- color form a fungible pool — any herb of the color makes that color's dye — so
+-- the useful figure is the total herb count for the color, not per-herb.
+--
+-- This was a two-step chain until 12.1 (10 herbs -> 1 pigment -> 1 dye) and the
+-- middle of it is gone. Nothing here counts a pigment any more, and the functions
+-- kept their names because what they answer hasn't changed, only how many steps it
+-- takes to answer it.
 --------------------------------------------------------------------------------
 
--- The supply picture for one color: how many pigments the account already holds,
--- how many more it could mill from its herb pool, and the herb breakdown. This is
--- the per-color number the game's craft window shows (makeablePigments), computed
--- ourselves so it can be combined across colors for the contention view.
+-- The supply picture for one color: how many dyes the account already holds, how
+-- many more it could make from its herb pool, and the herb breakdown.
 function ns.GetColorSupply(color)
-	local pigment = ns.pigmentByColor[color]
-	local ownedPigments = pigment and ns.GetTotal(pigment.key) or 0
+	local dye = ns.byKey[color]
+	local ownedDyes = (dye and dye.kind == "dye") and ns.GetTotal(dye.key) or 0
 
-	local perPigment = ns.HERBS_PER_PIGMENT
+	local perDye = ns.HERBS_PER_DYE
 
-	-- Milling needs 10 of the SAME herb, so a color's pigment yield is the sum of
+	-- A dye takes 10 of the SAME herb, so a color's yield is the sum of
 	-- floor(count / 10) over each herb separately — NOT floor(total / 10). Odd
-	-- remainders in different herbs can't be combined into a pigment.
+	-- remainders in different herbs can't be combined into a dye.
 	local herbs = ns.herbsByColor[color] or {}
-	local ownedHerbs, pigmentsFromHerbs, breakdown = 0, 0, {}
+	local ownedHerbs, dyesFromHerbs, breakdown = 0, 0, {}
 	for _, herb in ipairs(herbs) do
 		local have = ns.GetTotal(herb.key)
 		ownedHerbs = ownedHerbs + have
-		pigmentsFromHerbs = pigmentsFromHerbs + math.floor(have / perPigment)
+		dyesFromHerbs = dyesFromHerbs + math.floor(have / perDye)
 		breakdown[#breakdown + 1] = {
 			key = herb.key,
 			name = herb.name or ("Item " .. tostring(herb.id)), -- pending a cached name
@@ -1046,51 +1204,35 @@ function ns.GetColorSupply(color)
 
 	return {
 		color = color,
-		pigment = pigment and { key = pigment.key, name = pigment.name } or nil,
-		ownedPigments = ownedPigments,
+		ownedDyes = ownedDyes,
 		ownedHerbs = ownedHerbs,
-		herbsPerPigment = perPigment,
-		pigmentsFromHerbs = pigmentsFromHerbs,          -- craftable right now (what the game shows)
-		makeablePigments = ownedPigments + pigmentsFromHerbs, -- held + craftable
+		herbsPerDye = perDye,
+		dyesFromHerbs = dyesFromHerbs,             -- makeable right now from flowers held
+		makeableDyes = ownedDyes + dyesFromHerbs,  -- held + makeable
 		herbs = breakdown,
 	}
 end
 
--- Status for a single dye against its goal. Treats this color's herbs in
--- isolation (dedicated to this dye); the cross-color contention — where a shared
--- herb can't feed two colors at once — is a separate, whole-account question
--- answered by ns.PlanGoals below.
+-- Status for one color against its goal. Treats this color's herbs in isolation
+-- (dedicated to this dye); the cross-color contention — where a shared herb can't
+-- feed two colors at once — is flagged in the row tooltip instead.
 function ns.GetRecipeStatus(dyeKey)
 	local dye = ns.byKey[dyeKey]
 	if not dye or dye.kind ~= "dye" then return nil end
 
 	local color = dye.color
 	local supply = ns.GetColorSupply(color)
-	local perPigment = ns.HERBS_PER_PIGMENT
-	local perDye = ns.PIGMENTS_PER_DYE
+	local perDye = ns.HERBS_PER_DYE
 
 	local owned = ns.GetTotal(dyeKey)
 	local goal = ns.GetGoal(dyeKey)
 	local shortfall = math.max(0, goal - owned)
 
-	local pigmentsNeeded = shortfall * perDye
-	local availablePigments = supply.ownedPigments + supply.pigmentsFromHerbs
-	local craftableNow = math.floor(availablePigments / perDye) -- dyes makeable right now
-	local canCraftGoal = availablePigments >= pigmentsNeeded
-
-	-- Split the craftable-now figure by source, so the UI can show them separately:
-	-- dyes from pigments already held, vs dyes from milling the flowers on hand.
-	-- (PIGMENTS_PER_DYE is 1, so these are just the pigment / herb-pigment counts.)
-	local craftableFromPigments = math.floor(supply.ownedPigments / perDye)
-	local craftableFromHerbs = math.floor(supply.pigmentsFromHerbs / perDye)
-
-	-- What's missing to hit the goal: pigments beyond those already held, the herbs
-	-- to mill for them, and how many MORE herbs to gather. Current herbs already
-	-- cover `pigmentsFromHerbs` of the needed pigments, and because milling needs 10
-	-- of the same herb, each remaining pigment needs a fresh stack of 10.
-	local pigmentsShort = math.max(0, pigmentsNeeded - supply.ownedPigments)
-	local herbsNeeded = pigmentsShort * perPigment
-	local herbsShort = math.max(0, pigmentsShort - supply.pigmentsFromHerbs) * perPigment
+	-- What's missing to hit the goal, and how many MORE herbs to gather for it.
+	-- Current herbs already cover `dyesFromHerbs` of the shortfall, and because a dye
+	-- takes 10 of the same herb, each dye beyond that needs a fresh stack of 10.
+	local herbsNeeded = shortfall * perDye
+	local herbsShort = math.max(0, shortfall - supply.dyesFromHerbs) * perDye
 
 	return {
 		key = dyeKey,
@@ -1098,25 +1240,19 @@ function ns.GetRecipeStatus(dyeKey)
 		owned = owned,
 		goal = goal,
 		shortfall = shortfall,
-		pigment = supply.pigment,
-		ownedPigments = supply.ownedPigments,
 		ownedHerbs = supply.ownedHerbs,
-		herbsPerPigment = perPigment,
-		pigmentsPerDye = perDye,
-		pigmentsNeeded = pigmentsNeeded,
-		pigmentsShort = pigmentsShort,   -- pigments still to mill
-		herbsNeeded = herbsNeeded,       -- herbs to mill those pigments
+		herbsPerDye = perDye,
+		herbsNeeded = herbsNeeded,       -- herbs to make the whole shortfall
 		herbsShort = herbsShort,         -- herbs still to gather/buy
-		craftableNow = craftableNow,     -- dyes makeable right now from this color
-		craftableFromPigments = craftableFromPigments, -- dyes from pigments held
-		craftableFromHerbs = craftableFromHerbs,       -- dyes from milling flowers held
-		canCraftGoal = canCraftGoal,     -- can current supply close the shortfall?
+		craftableNow = supply.dyesFromHerbs, -- dyes makeable right now from flowers held
+		canCraftGoal = supply.dyesFromHerbs >= shortfall, -- can the flowers close the gap?
 		herbs = supply.herbs,
+		shades = ns.shadesByColor[color] or {},
 	}
 end
 
--- Craft breakdown for a dye's expand view. One dye costs 10 of a SINGLE flower to
--- mill, so crafting via a flower costs 10 × that flower's unit price. Per flower:
+-- Craft breakdown for a color's expand view. One dye costs 10 of a SINGLE flower,
+-- so making it via a flower costs 10 × that flower's unit price. Per flower:
 -- how many you hold, how many dyes that makes, its craft cost, and whether it's the
 -- cheapest route into this color. Flowers are ordered cheapest-to-craft first.
 --
@@ -1129,7 +1265,7 @@ function ns.GetCraftBreakdown(dyeKey)
 	local dye = ns.byKey[dyeKey]
 	if not dye or dye.kind ~= "dye" then return nil end
 
-	local perDye = ns.HERBS_PER_PIGMENT * ns.PIGMENTS_PER_DYE -- flowers per dye (10)
+	local perDye = ns.HERBS_PER_DYE -- flowers per dye
 
 	local hiddenHerbs = DyeingDownTheHouseDB.ui.hiddenHerbs or {}
 	local flowers, cheapestCraft = {}, nil
@@ -1187,7 +1323,7 @@ function ns.GetCraftCost(dyeKey)
 	local dye = ns.byKey[dyeKey]
 	if not dye or dye.kind ~= "dye" then return nil end
 
-	local perDye = ns.HERBS_PER_PIGMENT * ns.PIGMENTS_PER_DYE
+	local perDye = ns.HERBS_PER_DYE
 	local hiddenHerbs = DyeingDownTheHouseDB.ui.hiddenHerbs or {}
 	local cheapest
 	for _, herb in ipairs(ns.herbsByColor[dye.color] or {}) do
@@ -1199,16 +1335,16 @@ function ns.GetCraftCost(dyeKey)
 	return cheapest and cheapest * perDye or nil
 end
 
--- For the pigment reagent picker: is THIS flower the one to mill for `color`?
--- Returns true (cheapest route into the color — mill this), false (a dearer flower
+-- Is THIS flower the one to take to the station for `color`?
+-- Returns true (cheapest route into the color — use this), false (a dearer flower
 -- would do the same job for less), or nil (nothing of this color is priced yet, so
 -- there's no honest answer and the picker shows no mark at all).
 --
 -- The comparison used to be against the dearest dye of the color — the most the
 -- pigment could become. Warband-bound dyes have no price to be dearest, so the
--- check is now flower against flower: of everything that mills into this color,
--- which costs least? A red X no longer means "don't bother", it means "there's a
--- cheaper flower in this list".
+-- check is now flower against flower: of everything that makes this color, which
+-- costs least? A red X no longer means "don't bother", it means "there's a cheaper
+-- flower in this list".
 function ns.GetHerbCraftVerdict(herbKey, color)
 	local herbPrice = ns.GetPrice(herbKey)
 	if not herbPrice then return nil end
@@ -1222,7 +1358,7 @@ function ns.GetHerbCraftVerdict(herbKey, color)
 	return herbPrice <= cheapest
 end
 
--- Same, keyed by the herb's item ID (what the reagent picker hands us).
+-- Same, keyed by the herb's item ID.
 function ns.GetHerbCraftVerdictByID(itemID, color)
 	local entry = ns.byID[itemID]
 	if not entry then return nil end
@@ -1234,19 +1370,45 @@ end
 --------------------------------------------------------------------------------
 
 -- Dyes matching `query` (case-insensitive substring). A dye matches when the
--- needle is found in its own name OR in its color-family name — so "blue" finds
--- the dyes literally named "…Blue…" AND every dye whose family is blue. Empty or
--- nil query returns every dye, in Data.lua order.
+-- needle is found in its own name, in its color-family name, OR in the name of any
+-- SHADE of that family. Empty or nil query returns every dye, in Data.lua order.
+--
+-- That last one is what keeps the search useful after 12.1. There are only nine
+-- items now, so searching them alone would be pointless — but the 77 color names
+-- are what a player actually has in mind, and typing "obsidium" should land on
+-- Black rather than find nothing. ns.MatchedShades gives the UI the specific
+-- shades that matched, so it can show which ones they were.
+local function ShadeMatch(color, needle)
+	for _, shade in ipairs(ns.shadesByColor[color] or {}) do
+		if shade.name:lower():find(needle, 1, true) then return true end
+	end
+	return false
+end
+
 function ns.FilterDyes(query)
 	local out = {}
 	local needle = query and query:lower():gsub("^%s+", ""):gsub("%s+$", "")
 	for _, dye in ipairs(ns.DYES) do
 		local match = not needle or needle == ""
-			or dye.name:lower():find(needle, 1, true)
+			or dye.name:lower():find(needle, 1, true) and true
 			or (dye.color and tostring(dye.color):lower():find(needle, 1, true)) and true
+			or ShadeMatch(dye.color, needle)
 		if match then
 			out[#out + 1] = dye
 		end
+	end
+	return out
+end
+
+-- The shades of `color` whose name contains the current search, or nil when there's
+-- no search running. The UI uses this to pull matches to the top of an opened row.
+function ns.MatchedShades(color, query)
+	query = query or (DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui.search) or ""
+	local needle = query:lower():gsub("^%s+", ""):gsub("%s+$", "")
+	if needle == "" then return nil end
+	local out = {}
+	for _, shade in ipairs(ns.shadesByColor[color] or {}) do
+		if shade.name:lower():find(needle, 1, true) then out[#out + 1] = shade end
 	end
 	return out
 end
@@ -1263,31 +1425,38 @@ end
 -- Sortable columns and each one's natural default direction.
 local VALID_SORT = {
 	alpha = true, owned = true, goal = true, price = true,
-	craft = true, craftpig = true, craftherb = true,
+	craft = true, craftherb = true, short = true,
 }
 local DEFAULT_DIR = {
 	alpha    = "asc",   -- A–Z
 	owned    = "desc",  -- most owned first
 	goal     = "desc",  -- biggest goals first
 	price    = "asc",   -- cheapest to craft first (it's a cost now, not a value)
-	craft    = "desc",  -- most craftable first
-	craftpig = "desc",  -- most craftable from pigments first
-	craftherb = "desc", -- most craftable from flowers first
+	craft    = "desc",  -- most makeable first
+	craftherb = "desc", -- most flowers held first
+	short    = "desc",  -- most work outstanding first
 }
 
 -- The value(s) a mode sorts on, per dye: a primary and an optional secondary that
 -- breaks ties before the name. `craftherb` (the Flowers column) ties by dyes
--- craftable, then by flowers HELD, so equal-craftable rows still read biggest-pile
+-- makeable, then by flowers HELD, so equal-makeable rows still read biggest-pile
 -- first. Primary nil means "no value" (price only — unpriced sorts last).
+--
+-- `craftpig` was dropped with the pigments themselves. A saved preference naming it
+-- falls through VALID_SORT to alpha rather than erroring, which is the right
+-- outcome for a column that no longer exists.
 local function MetricPair(mode, key)
 	if mode == "owned" then return ns.GetTotal(key) end
 	if mode == "goal"  then return ns.GetGoal(key) end
 	if mode == "price" then return ns.GetCraftCost(key) end      -- may be nil
-	if mode == "craft" or mode == "craftpig" or mode == "craftherb" then
+	if mode == "short" then
+		local rc = ns.GetRecipeStatus(key)
+		return rc and rc.shortfall or 0
+	end
+	if mode == "craft" or mode == "craftherb" then
 		local rc = ns.GetRecipeStatus(key)
 		if not rc then return 0, 0 end
-		if mode == "craftpig"  then return rc.craftableFromPigments, rc.ownedPigments end
-		if mode == "craftherb" then return rc.craftableFromHerbs, rc.ownedHerbs end
+		if mode == "craftherb" then return rc.ownedHerbs, rc.craftableNow end
 		return rc.craftableNow, rc.ownedHerbs
 	end
 	return 0
@@ -1342,173 +1511,46 @@ function ns.GetDisplayDyes()
 end
 
 --------------------------------------------------------------------------------
--- Color families (the "By Color Family" tab)
+-- Opening a row
 --
--- Grouping exists because pigments and flowers belong to a COLOR, not to a dye.
--- Every black dye mills from the same flowers and draws on the same pigment pile, so
--- printing those figures on all six black rows implied six separate stockpiles when
--- there is one. The family view states them once.
+-- There used to be two tabs and two sort systems here, because a dye and a color
+-- family were different things: flowers and pigment belonged to the family, counts
+-- and goals to the dye. 12.1 made them the same thing, so both views collapsed
+-- into the one list and all of that machinery went with them.
+--
+-- What's left is which rows are open. A row opens onto its flowers and, if the
+-- player wants them, the color names that family covers.
 --------------------------------------------------------------------------------
 
-local VALID_GROUP_SORT = {
-	color = true, pigment = true, flowers = true, makeable = true, short = true,
-}
-local GROUP_DEFAULT_DIR = {
-	color    = "asc",  -- the canonical order in ns.COLORS
-	pigment  = "desc", -- most stock first
-	flowers  = "desc",
-	makeable = "desc",
-	short    = "desc", -- most work outstanding first
-}
-
-function ns.GetGroupSort()
-	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
-	local mode = VALID_GROUP_SORT[ui.groupSort] and ui.groupSort or "color"
-	return mode, ui.groupSortDir or GROUP_DEFAULT_DIR[mode]
-end
-
-function ns.SetGroupSort(mode, dir)
-	if not VALID_GROUP_SORT[mode] then return false end
-	local ui = DyeingDownTheHouseDB.ui
-	ui.groupSort, ui.groupSortDir = mode, dir or GROUP_DEFAULT_DIR[mode]
-	ns.Refresh()
-	return true
-end
-
--- Clicking the active column flips it; clicking another switches to it at that
--- column's natural direction. Same behavior as the dye list's headers.
-function ns.CycleGroupSort(mode)
-	if not VALID_GROUP_SORT[mode] then return end
-	local ui = DyeingDownTheHouseDB.ui
-	if ui.groupSort == mode then
-		ui.groupSortDir = (ui.groupSortDir == "asc") and "desc" or "asc"
-	else
-		ui.groupSort = mode
-		ui.groupSortDir = GROUP_DEFAULT_DIR[mode]
-	end
-	ns.Refresh()
-end
-
--- One entry per color that has any visible dye, each carrying the family's shared
--- supply and how many of its dyes are still under their goal. Both are computed here
--- rather than in the UI so the family tab's headers can sort on them.
-function ns.GetDisplayGroups()
-	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
-	local hidden = ui.hiddenDyes or {}
-
-	local byColor = {}
-	for _, dye in ipairs(ns.FilterDyes(ui.search)) do
-		if not hidden[dye.key] then
-			local list = byColor[dye.color]
-			if not list then list = {}; byColor[dye.color] = list end
-			list[#list + 1] = dye
-		end
-	end
-
-	local order = {}
-	for i, color in ipairs(ns.COLORS) do order[color] = i end
-
-	local groups, taken = {}, {}
-	local function emit(color)
-		local dyes = byColor[color]
-		if not dyes or #dyes == 0 or taken[color] then return end
-		taken[color] = true
-
-		-- DYES still needed, not dye types under goal. The unit matters: `short` sits
-		-- next to `makeable` in the family view, so the two have to be comparable —
-		-- "18 makeable, 33 short" says at a glance that this family's stock can't close
-		-- the gap. Counting types gave "18 makeable, 1 short", which reads as covered
-		-- and is the opposite of the truth.
-		local short = 0
-		for _, dye in ipairs(dyes) do
-			local goal = ns.GetGoal(dye.key)
-			if goal > 0 then
-				short = short + math.max(0, goal - ns.GetTotal(dye.key))
-			end
-		end
-
-		local supply = ns.GetColorSupply(color)
-		groups[#groups + 1] = {
-			color = color,
-			dyes = ns.SortDyes(dyes, ui.sort, ui.sortDir),
-			supply = supply,
-			short = short,
-			-- Flattened for sorting and for the family tab's cells.
-			pigment = supply.ownedPigments,
-			flowers = supply.ownedHerbs,
-			makeable = supply.makeablePigments,
-			index = order[color] or 99,
-		}
-	end
-
-	for _, color in ipairs(ns.COLORS) do emit(color) end
-	-- A dye whose color isn't in ns.COLORS would otherwise vanish from the window
-	-- entirely. Better to show it in an odd position than to lose it.
-	for color in pairs(byColor) do emit(color) end
-
-	local mode, dir = ns.GetGroupSort()
-	local asc = (dir == "asc")
-	table.sort(groups, function(a, b)
-		if mode ~= "color" then
-			local ma, mb = a[mode] or 0, b[mode] or 0
-			if ma ~= mb then if asc then return ma < mb else return ma > mb end end
-		end
-		-- Canonical color order is the tiebreak, and the whole sort when mode=="color".
-		if asc or mode ~= "color" then return a.index < b.index end
-		return a.index > b.index
-	end)
-
-	return groups
-end
-
 -- A color is open when the player opened it — or whenever a search is running. A
--- search that narrowed the list to three dyes but left every group shut would look
--- like it had found nothing at all.
+-- search that matched a shade but left every row shut would look like it had found
+-- nothing at all, when the match is precisely the thing hidden inside the row.
 function ns.IsColorExpanded(color)
 	local ui = DyeingDownTheHouseDB.ui
 	if (ui.search or "") ~= "" then return true end
-	return ui.expandedColors[color] == true
+	return ui.expanded[color] == true
 end
 
 function ns.ToggleColor(color)
 	local ui = DyeingDownTheHouseDB.ui
-	ui.expandedColors[color] = (not ui.expandedColors[color]) or nil
+	ui.expanded[color] = (not ui.expanded[color]) or nil
 	ns.Refresh()
-end
-
-local VALID_TAB = { family = true, dye = true }
-
-function ns.GetTab()
-	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
-	return VALID_TAB[ui.tab] and ui.tab or "family"
-end
-
-function ns.SetTab(tab)
-	if not VALID_TAB[tab] then return false end
-	DyeingDownTheHouseDB.ui.tab = tab
-	ns.Refresh()
-	return true
 end
 
 function ns.SetAllColorsExpanded(open)
-	local e = DyeingDownTheHouseDB.ui.expandedColors
+	local e = DyeingDownTheHouseDB.ui.expanded
 	for _, color in ipairs(ns.COLORS) do e[color] = open and true or nil end
 	ns.Refresh()
 end
 
--- The craft breakdown for a whole color. The per-flower figures are the same ones
--- GetCraftBreakdown produces and are identical for every dye of a color — flowers
--- and pigment belong to the family, not to one dye — so any dye of the color gives
--- the same answer and the first one will do. (It used to have to pick the
--- dearest-priced dye, because the verdict was measured against that price; with no
--- dye prices left there's nothing to choose between them.)
+-- The craft breakdown for a whole color. One dye per color now, so this is just
+-- GetCraftBreakdown under the name the UI calls it by. Kept as its own function
+-- because "the flowers for this color" is what the expand view is actually asking,
+-- and because a color key that names no dye should give nil rather than an error.
 function ns.GetColorCraftBreakdown(color)
-	local pick
-	for _, dye in ipairs(ns.DYES) do
-		if dye.color == color then pick = dye.key; break end
-	end
-	if not pick then return nil end
-	return ns.GetCraftBreakdown(pick)
+	local dye = ns.byKey[color]
+	if not (dye and dye.kind == "dye") then return nil end
+	return ns.GetCraftBreakdown(dye.key)
 end
 
 function ns.IsDyeHidden(key)
@@ -1817,6 +1859,11 @@ SlashCmdList.DYEINGDOWNTHEHOUSE = function(msg)
 		Print(cmd == "expand" and "all colors opened." or "all colors closed.")
 	elseif cmd == "options" or cmd == "config" then
 		if ns.OpenOptions then ns.OpenOptions() end
+	elseif cmd == "probe" then
+		-- Undocumented on purpose (it isn't in /dye help): a development tool for
+		-- reading the shape of Blizzard's 12.1 house dye panel, which moved and took
+		-- our goal box with it. See Probe.lua.
+		if ns.RunProbe then ns.RunProbe(rest) else Print("probe isn't loaded.") end
 	elseif cmd == "scan" then
 		local ok, err = ns.StartScan()
 		if not ok then Print(err or "cannot scan right now.") end
@@ -1865,12 +1912,12 @@ SlashCmdList.DYEINGDOWNTHEHOUSE = function(msg)
 	elseif cmd == "help" then
 		Print("commands:")
 		print("  /dye — toggle the window")
-		print("  /dye search <text> — filter by dye name or color family (blank clears)")
-		print("  /dye sort <alpha | price | owned> — change the order (price = cost to craft)")
+		print("  /dye search <text> — filter by color or by a shade name like \"obsidium\" (blank clears)")
+		print("  /dye sort <alpha | price | owned> — change the order (price = cost to make)")
 		print("  /dye scan — price the flowers from your chosen price source")
 		print("  /dye source [auto|tsm|auctionator|blizzard] — where prices come from")
-		print("  /dye expand | collapse — open or close every color group")
-		print("  /dye hidezero — toggle hiding dyes you have none of")
+		print("  /dye expand | collapse — open or close every color")
+		print("  /dye hidezero — toggle hiding colors you have no dye of")
 		print("  /dye lock | unlock — freeze or free the frame")
 		print("  /dye reset — recenter the frame")
 		print("  /dye options — open the settings panel")

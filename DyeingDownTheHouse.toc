@@ -1,8 +1,8 @@
-## Interface: 120007
+## Interface: 120100
 ## Title: Dyeing Down The House
-## Notes: An account-wide tally of every housing dye across your bags, bank and Warband bank — with goals, recipes and what each dye costs to make. Color your world.
+## Notes: An account-wide tally of every housing dye across your bags, bank and Warband bank — with goals, flowers and what each dye costs to make. Color your world.
 ## Author: KTM (abitofmoss)
-## Version: 1.3.0
+## Version: 2.0.0
 ## X-License: All Rights Reserved
 ## Category: Professions
 ## IconTexture: 7449428
@@ -15,5 +15,5 @@ Core.lua
 Prices.lua
 UI.lua
 Options.lua
-Crafting.lua
 Housing.lua
+Probe.lua

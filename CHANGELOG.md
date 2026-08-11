@@ -2,6 +2,55 @@
 
 All notable changes to Dyeing Down The House are recorded here.
 
+## [2.0.0] — unreleased (Curse of Ula'tek, 12.1)
+
+Blizzard rebuilt the dye system in Curse of Ula'tek. Pigments are gone, the 62 dye
+items became nine, and crafting is one step at the dye station instead of two. The
+addon is rebuilt to match, which is why this is a 2.0.
+
+**This build targets 12.1 and will not work correctly on 12.0.7.**
+
+### Changed
+
+- **Nine colors instead of 62 dyes.** One row per color: Black, Blue, Brown, Green,
+  Orange, Purple, Red, White, Yellow. That's what the game stocks now, so that's
+  what the window counts and what goals are set against.
+- **Teal is gone.** Blizzard retired the category. Its shades moved to blue or
+  green, and a teal goal moves with them.
+- **The two tabs are one list.** They existed because a dye and a color family were
+  different things. They aren't any more, and both tabs were showing the same nine
+  rows.
+- **Open a color to see the shades it paints.** All 77 of them, the 15 new ones
+  included. Searching a shade name finds its family, so typing "obsidium" takes you
+  to Black and pulls the match to the top of the row.
+- **The Pigment column is gone**, along with the pigments. Makeable covers what it
+  was for: how many you could make right now from the flowers on hand.
+- **Your goals are carried over, added up.** Five Alliance Blue and three Midnight
+  Blue becomes eight Blue — the same thing Hestia's mail does to the dyes
+  themselves.
+- Dye counts from before the patch are cleared rather than carried across. Those
+  items don't exist any more and the replacements arrive by mail you have to
+  collect, so counting them would claim dyes you don't have yet. Bags recount on
+  login and the bank on its next visit.
+- Hiding a color needs every one of its old shades to have been unticked. One
+  unticked shade shouldn't hide a whole family.
+
+### Removed
+
+- **The Dye Crafting window markers.** Blizzard removed the recipes they hung on —
+  there's no crafting book to manage any more, you take herbs to the station and
+  click it.
+
+### Known gaps
+
+- The "Dye Needed" box in the house dye panel doesn't appear yet. 12.1 rebuilt that
+  panel and moved everything the box anchored to.
+- The nine dye items are matched by name until their item IDs can be read from the
+  game, so a color counts from the first time you hold one.
+- Nine shades are shown with "family not confirmed" under them. Blizzard hasn't said
+  which family they landed in, and a guess that looks like a fact is worse than a
+  gap.
+
 ## [1.3.0] — 2026-08-04
 
 Housing dyes are Warband-bound as of this patch, in preparation for 12.1. They can't

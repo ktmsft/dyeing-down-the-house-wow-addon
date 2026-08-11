@@ -163,21 +163,20 @@ local function BuildPanel()
 
 	local subtitle = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	subtitle:SetPoint("TOPLEFT", 10, y)
-	subtitle:SetText("Tracks the housing dyes you still need, and the cheapest way to get them, craft or buy.")
+	subtitle:SetText("Tracks the housing dyes you still need, and the cheapest flowers to make them from.")
 	subtitle:SetTextColor(0.7, 0.7, 0.7)
 	y = y - 24
 
 	-- Columns to show -------------------------------------------------------
-	SectionHeader(content, "Columns to show   (By Dye tab)"):SetPoint("TOPLEFT", 8, y)
+	SectionHeader(content, "Columns to show"):SetPoint("TOPLEFT", 8, y)
 	y = y - 24
-	-- These are the "By Dye" (per-dye) tab's columns. The "By Color Family" tab has
-	-- a fixed set — every column there is the reason that view exists — so it has
-	-- nothing to toggle.
+	-- Color and Have aren't here: they're what the window is for, so there's nothing
+	-- sensible to do with a list that has them turned off.
 	local colDefs = {
-		{ "pigment", "Pigments — owned & craftable" },
-		{ "flowers", "Flowers — owned & craftable" },
-		{ "value",   "Dye cost (to craft)" },
-		{ "goal",    "Dye needed (goal)" },
+		{ "flowers",  "Flowers — held & what they'd make" },
+		{ "makeable", "Makeable now" },
+		{ "value",    "Dye cost (to make)" },
+		{ "goal",     "Dye needed (goal)" },
 	}
 	for i, cd in ipairs(colDefs) do
 		local key = cd[1]
@@ -208,9 +207,9 @@ local function BuildPanel()
 		function() return DyeingDownTheHouseDB.ui.housingGoalInput end,
 		function(v) DyeingDownTheHouseDB.ui.housingGoalInput = v end)
 		:SetPoint("TOPLEFT", 16, y)
-	MakeCheck(content, "Mark the cheapest herbs when crafting",
-		function() return DyeingDownTheHouseDB.ui.markHerbs end,
-		function(v) DyeingDownTheHouseDB.ui.markHerbs = v; if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end end)
+	MakeCheck(content, "List a color's shades when you open it",
+		function() return DyeingDownTheHouseDB.ui.showShades ~= false end,
+		function(v) DyeingDownTheHouseDB.ui.showShades = v; ns.Refresh() end)
 		:SetPoint("TOPLEFT", 16 + COL2, y)
 	y = y - 26
 	MakeCheck(content, "Rainbow title  (off = plain)",
@@ -268,18 +267,23 @@ local function BuildPanel()
 		y = y - 24 * math.ceil(#rows / 2) - 16
 	end
 
-	-- Two collapsible checklists (Dyes, Flowers) ----------------------------
+	-- Two collapsible checklists (Colors, Flowers) --------------------------
+	--
+	-- The dye list was 62 entries and needed sorting into families to be readable.
+	-- It's the nine families themselves now, so it's already in the canonical order
+	-- and there's nothing left to sort. The shade count rides along on each label,
+	-- because "Blue" on its own doesn't say that it covers ten color names.
 	local dyeItems = {}
-	do
-		local colIndex = {}
-		for i, cc in ipairs(ns.COLORS or {}) do colIndex[cc] = i end
-		for _, d in ipairs(ns.DYES) do
-			dyeItems[#dyeItems + 1] = { label = (d.name:gsub(" Dye$", "")), key = d.key, color = d.color }
+	for _, color in ipairs(ns.COLORS or {}) do
+		local dye = ns.byKey and ns.byKey[color]
+		if dye then
+			local shades = (ns.shadesByColor and ns.shadesByColor[color]) or {}
+			dyeItems[#dyeItems + 1] = {
+				label = ("%s   (%d colors)"):format(color:gsub("^%l", string.upper), #shades),
+				key = dye.key,
+				color = color,
+			}
 		end
-		table.sort(dyeItems, function(a, b)
-			if a.color ~= b.color then return (colIndex[a.color] or 99) < (colIndex[b.color] or 99) end
-			return a.label < b.label
-		end)
 	end
 	local dyeContainer = BuildChecklist(content, dyeItems,
 		function(it) return ns.IsDyeHidden(it.key) end,
@@ -297,7 +301,7 @@ local function BuildPanel()
 		ns.SetAllHerbsHidden)
 
 	local sections = {
-		{ label = ("Dyes to show   (%d) — uncheck to hide"):format(#dyeItems),
+		{ label = ("Colors to show   (%d) — uncheck to hide"):format(#dyeItems),
 			container = dyeContainer, open = false },
 		{ label = ("Flowers to show   (%d) — uncheck to hide"):format(#herbItems),
 			container = herbContainer, open = false },

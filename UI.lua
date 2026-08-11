@@ -5,24 +5,27 @@ local ADDON, ns = ...
 --------------------------------------------------------------------------------
 -- UI.lua — the on-screen window.
 --
--- A movable, resizable window with two tabs, because there are two different
--- questions and they want different columns:
+-- A movable, resizable window showing one row per color:
 --
---   By Color Family   Color | Pigment | Flowers | Makeable | Short
---                     One row per family. Pigments and flowers belong to a COLOR,
---                     not a dye — every black dye mills from the same flowers and
---                     draws on the same pigment pile — so they're stated once here.
---                     Opens onto that family's flowers.
+--   Color | Have | Flowers | Makeable | Cost | Dye Needed
 --
---   By Dye            Dye | Have | Pigment | Flowers | Cost | Dye Needed
---                     The flat per-dye list, for "how am I doing on THIS dye".
---                     Its Pigment/Flowers columns necessarily repeat down every dye
---                     of a family; the family tab exists so you don't have to read
---                     them that way. Opens onto one dye's flowers.
+-- Open a row and it shows the flowers that color is made from, cheapest first, and
+-- the shades that color can paint.
 --
--- Optional columns (dye tab) can be hidden from the options panel; hidden columns
--- reflow away. Clickable headers sort — dyes on one tab, families on the other.
--- All data comes from Core.
+-- This had TWO tabs until 12.1, and losing them is the single biggest change in
+-- here. They existed because a dye and a color family were different things: 62 dye
+-- items each with their own count and goal, sitting on top of a pigment pile and a
+-- flower pool that belonged to the family. Printing the family's figures on all six
+-- black rows implied six stockpiles where there was one, so the family view stated
+-- them once and the dye view answered "how am I doing on THIS dye".
+--
+-- 12.1 collapsed the 62 into nine, one per color. The dye IS the family now, both
+-- tabs were showing the same nine rows, and keeping them would have been two names
+-- for one list. The shades live on as names you can paint — so they're what you get
+-- when you open a row, which is exactly where the flowers already were.
+--
+-- Optional columns can be hidden from the options panel; hidden columns reflow away.
+-- Clickable headers sort. All data comes from Core.
 --------------------------------------------------------------------------------
 
 local ROW_H   = 22
@@ -34,64 +37,54 @@ local HEIGHT_MIN, HEIGHT_MAX = 200, 900
 -- Dye-name column can't balloon. Both bounds ride the fit width, so they shift as
 -- columns are shown/hidden and the window can never scale out of control.
 local WIDTH_SHRINK, WIDTH_GROW = 60, 240
-local TOP_INSET = 120
+-- Where the column headers sit, and where the list starts under them. Both came
+-- up by the height of the tab strip when the second view was removed.
+local HEADER_Y = 70
+local TOP_INSET = 94
 local BOT_INSET = 14
 local COLLAPSED_H = 34   -- height of the title-bar strip when collapsed
 local ROW_RIGHT = -30          -- a row's right edge, in frame-right coordinates
 local GAP, MARGIN = 8, 6
 
--- Two views, two column sets.
+-- One view, one column set. Every column is per-color, because a color is all
+-- there is now: one dye item, one flower pool, one goal.
 --
---   dye     the flat per-dye list — "how am I doing on THIS dye"
---   family  one row per color family — "what can I make, and out of what"
---
--- They can't share a table. Pigment and Flowers belong to a COLOR, so on the dye tab
--- they repeat identically down every dye of a family; on the family tab they're the
--- whole point and are stated once. Forcing both into one grid is what made the
--- numbers look like separate stockpiles.
+-- `Pigment` is gone with the pigments. The Makeable column absorbed what it was
+-- really for — "can I close this gap without going shopping" — and now answers it
+-- in one number instead of two.
 local COLDEF = {
-	-- dye tab
-	owned   = { header = "Have",    sort = "owned",     w = 44, tab = "dye" },
-	pigment = { header = "Pigment", sort = "craftpig",  w = 62, tab = "dye", optional = true,
-		hint = "Pigments of this color you hold, and in ( ) how many of this dye they'd make.\nShared by every dye of the color — see the By Color Family tab." },
-	flowers = { header = "Flowers", sort = "craftherb", w = 66, tab = "dye", optional = true,
-		hint = "Flowers of this color you hold, and in ( ) how many of this dye they'd mill into.\nShared by every dye of the color — see the By Color Family tab." },
+	owned   = { header = "Have",    sort = "owned",     w = 44,
+		hint = "Housing dyes of this color across every character, bank and the Warband bank." },
+	flowers = { header = "Flowers", sort = "craftherb", w = 66, optional = true,
+		hint = "Flowers of this color you hold, and in ( ) how many dyes they'd make.\nTen of the SAME flower make one dye." },
+	makeable = { header = "Makeable", sort = "craft",   w = 70, optional = true,
+		hint = "Dyes of this color you could make right now from the flowers on hand.\nTen of the SAME flower make one dye, so odd remainders don't add up." },
 	-- Was "Value" — a dye's auction price — until dyes went Warband-bound and stopped
 	-- having one. What's left that's still a number is what it costs to MAKE, so
 	-- that's what the column shows. The key and sort mode keep their old names so
 	-- saved column and sort preferences carry over.
-	value   = { header = "Cost",    sort = "price",     w = 72, tab = "dye", optional = true,
-		hint = "What one costs to make: ten of its color's cheapest flower.\n(Dyes are temporarily Warband-bound)" },
-	goal    = { header = "Dye Needed", sort = "goal",   w = 68, tab = "dye", optional = true },
-
-	-- family tab. Fixed set: each one is the reason this view exists, so none of them
-	-- is optional. `groupSort` marks them as sorting GROUPS rather than dyes.
-	gPigment  = { header = "Pigment",  groupSort = "pigment",  w = 62, tab = "family",
-		hint = "Pigments of this color the account holds." },
-	gFlowers  = { header = "Flowers",  groupSort = "flowers",  w = 66, tab = "family",
-		hint = "Flowers of this color the account holds, across every dye in the family." },
-	gMakeable = { header = "Makeable", groupSort = "makeable", w = 70, tab = "family",
-		hint = "Dyes of this color you could make right now: pigment in hand, plus what\nyour flowers would mill into. Ten of the SAME flower make one pigment." },
-	-- Wide enough for a four-figure shortfall: a goal of 500 on a dye you own 10 of is
-	-- an ordinary thing to set, and 48px clipped it.
-	gShort    = { header = "Short",    groupSort = "short",    w = 60, tab = "family",
-		hint = "Dyes still needed in this family: each goal minus what you own, added up.\nCompare it with Makeable to see whether your stock can close the gap." },
-}
-local ORDER_BY_TAB = {
-	dye    = { "goal", "value", "flowers", "pigment", "owned" },
-	family = { "gShort", "gMakeable", "gFlowers", "gPigment" },
+	value   = { header = "Cost",    sort = "price",     w = 72, optional = true,
+		hint = "What one costs to make: ten of this color's cheapest flower.\n(Dyes are Warband-bound, so there's no price to buy one at.)" },
+	-- Wide enough for a four-figure shortfall: a goal of 500 on a color you own 10 of
+	-- is an ordinary thing to set, and 48px clipped it.
+	goal    = { header = "Dye Needed", sort = "goal",   w = 68, optional = true,
+		hint = "How many of this color you want. The window counts down to it, and the\nhouse dye panel can set it while you're looking at the decor." },
 }
 
--- The columns of the active tab, right to left.
+-- Right to left.
+local ORDER = { "goal", "value", "makeable", "flowers", "owned" }
+
 local function ActiveOrder()
-	return ORDER_BY_TAB[ns.GetTab and ns.GetTab() or "family"] or ORDER_BY_TAB.family
+	return ORDER
 end
 
+-- Teal is gone from the game, and gone from here. A saved preference naming it
+-- migrates to blue (see Core's Migrate); nothing should ever ask for the swatch.
 local SWATCH = {
 	black  = { 0.32, 0.32, 0.34 }, blue   = { 0.25, 0.45, 0.95 },
 	brown  = { 0.55, 0.38, 0.22 }, green  = { 0.32, 0.72, 0.34 },
 	orange = { 0.96, 0.56, 0.16 }, purple = { 0.62, 0.32, 0.85 },
-	red    = { 0.87, 0.26, 0.26 }, teal   = { 0.20, 0.72, 0.72 },
+	red    = { 0.87, 0.26, 0.26 },
 	white  = { 0.95, 0.95, 0.95 }, yellow = { 0.96, 0.86, 0.22 },
 }
 local ACCENT = { 0.70, 0.53, 1.00 }
@@ -102,9 +95,8 @@ ns.ACCENT = ACCENT
 
 local frame, scroll, scrollBar, rows, searchBox, titleFS
 local headers = {}
-local tabButtons -- { family = btn, dye = btn }, each with :SetActive(bool)
 local layout = {}
-local sepCount = 0   -- how many column dividers are currently visible (per dye row)
+local sepCount = 0   -- how many column dividers are currently visible (per color row)
 local visible = 12
 
 -- Very short "how long ago" for the scan stamp: now / 5m / 2h / 3d.
@@ -206,57 +198,58 @@ end
 -- Tooltip
 --------------------------------------------------------------------------------
 
-local function ShowRowTooltip(row)
-	if not row.dyeKey then return end
-	local rc = ns.GetRecipeStatus(row.dyeKey)
-	if not rc then return end
-	GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
-	local dye = ns.byKey[row.dyeKey]
-	GameTooltip:AddLine(dye and dye.name or row.dyeKey, ACCENT[1], ACCENT[2], ACCENT[3])
-	GameTooltip:AddLine((SwatchIcon(rc.color) .. " color family: " .. rc.color), 0.8, 0.8, 0.8)
-	GameTooltip:AddDoubleLine("Owned", rc.owned, 0.8, 0.8, 0.8, 1, 1, 1)
-	if rc.goal > 0 then GameTooltip:AddDoubleLine("Needed", rc.goal, 0.8, 0.8, 0.8, 1, 1, 1) end
-	-- Explicitly flagged as the family's, not this dye's. These numbers are identical
-	-- for every dye of the color, and presenting them unlabeled was what made six
-	-- black rows look like six separate stockpiles.
-	GameTooltip:AddLine(" ")
-	GameTooltip:AddLine(("Shared by every %s dye:"):format(rc.color), 0.7, 0.7, 0.7)
-	GameTooltip:AddDoubleLine("   Pigments held", rc.ownedPigments, 0.8, 0.8, 0.8, 1, 1, 1)
-	GameTooltip:AddDoubleLine("   Flowers held", ("%d (%d more pigment)"):format(rc.ownedHerbs, rc.craftableFromHerbs), 0.8, 0.8, 0.8, 0.6, 0.9, 0.6)
-	GameTooltip:AddDoubleLine("   Makeable now", rc.craftableNow, 0.8, 0.8, 0.8, 0.5, 1, 0.5)
-	if rc.goal > 0 and rc.shortfall > 0 then
-		if rc.canCraftGoal then
-			GameTooltip:AddLine(("Craft %d more to reach it"):format(rc.shortfall), 0.4, 0.9, 0.4)
-		elseif rc.pigmentsShort > 0 then
-			GameTooltip:AddLine(("Short %d pigment (%d flowers)"):format(rc.pigmentsShort, rc.herbsShort), 0.95, 0.6, 0.3)
-		end
-	end
-	GameTooltip:Show()
-end
-
--- The color header's tooltip. This is where the shared-pool story gets told
--- properly: what the family holds, and which of its flowers are also feeding some
--- other color — the contention the old per-dye columns actively obscured.
+-- One tooltip, because there's one kind of data row now. What the color holds, what
+-- it could make, how far off the goal is, and which of its flowers are wanted by
+-- another color too — that last one being the thing a per-color view would
+-- otherwise hide completely.
 local function ShowColorTooltip(row)
 	local color = row.color
 	if not color then return end
-	local supply = ns.GetColorSupply(color)
+	local rc = ns.GetRecipeStatus(color)
+	if not rc then return end
+	local dye = ns.byKey[color]
 
 	GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
 	GameTooltip:AddLine(SwatchIcon(color) .. " " .. color:gsub("^%l", string.upper),
 		ACCENT[1], ACCENT[2], ACCENT[3])
-	GameTooltip:AddLine("One pigment pile and one flower pool, shared by every dye in this family.",
-		0.7, 0.7, 0.7, true)
-	GameTooltip:AddDoubleLine("Pigments held", supply.ownedPigments, 0.8, 0.8, 0.8, 1, 1, 1)
-	GameTooltip:AddDoubleLine("Flowers held",
-		("%d (%d more pigment)"):format(supply.ownedHerbs, supply.pigmentsFromHerbs),
-		0.8, 0.8, 0.8, 0.6, 0.9, 0.6)
-	GameTooltip:AddDoubleLine("Dyes makeable now", supply.makeablePigments, 0.8, 0.8, 0.8, 0.5, 1, 0.5)
+	if dye and dye.name then
+		GameTooltip:AddLine(dye.name .. (dye.id and "" or "   (not seen yet)"), 0.7, 0.7, 0.7)
+	end
 
-	-- Flowers that mill into more than one family. Spending them here denies them
-	-- there, which is the one thing a per-color view could otherwise hide.
+	GameTooltip:AddDoubleLine("Held", rc.owned, 0.8, 0.8, 0.8, 1, 1, 1)
+	if rc.goal > 0 then GameTooltip:AddDoubleLine("Needed", rc.goal, 0.8, 0.8, 0.8, 1, 1, 1) end
+	GameTooltip:AddDoubleLine("Flowers held",
+		("%d (%d more dyes)"):format(rc.ownedHerbs, rc.craftableNow),
+		0.8, 0.8, 0.8, 0.6, 0.9, 0.6)
+	GameTooltip:AddDoubleLine("Makeable now", rc.craftableNow, 0.8, 0.8, 0.8, 0.5, 1, 0.5)
+
+	if rc.goal > 0 and rc.shortfall > 0 then
+		if rc.canCraftGoal then
+			GameTooltip:AddLine(("Make %d more to reach it"):format(rc.shortfall), 0.4, 0.9, 0.4)
+		else
+			GameTooltip:AddLine(("Short %d dye (%d more flowers)"):format(rc.shortfall, rc.herbsShort),
+				0.95, 0.6, 0.3)
+		end
+	end
+
+	-- The shades this one dye paints. The whole point of 12.1: it isn't "a Midnight
+	-- Blue Dye" any more, it's a Blue Housing Dye that does all of these.
+	local shades = rc.shades or {}
+	if #shades > 0 then
+		GameTooltip:AddLine(" ")
+		GameTooltip:AddLine(("Paints %d colors:"):format(#shades), 0.7, 0.7, 0.7)
+		local names = {}
+		for i = 1, math.min(#shades, 6) do
+			names[#names + 1] = shades[i].name .. (shades[i].guess and "?" or "")
+		end
+		local line = table.concat(names, ", ")
+		if #shades > 6 then line = line .. (", and %d more"):format(#shades - 6) end
+		GameTooltip:AddLine("   " .. line, 0.8, 0.8, 0.8, true)
+	end
+
+	-- Flowers that feed more than one family. Spending them here denies them there.
 	local shared = {}
-	for _, herb in ipairs(supply.herbs) do
+	for _, herb in ipairs(rc.herbs or {}) do
 		if herb.have > 0 and #(herb.colors or {}) > 1 then shared[#shared + 1] = herb end
 	end
 	if #shared > 0 then
@@ -316,7 +309,7 @@ local function CreateRow(index)
 	row.capBottom:SetHeight(1)
 	row.capBottom:Hide()
 
-	-- Dye-mode widgets ------------------------------------------------------
+	-- Color-row widgets -----------------------------------------------------
 	row.expander = row:CreateTexture(nil, "OVERLAY")
 	row.expander:SetSize(14, 14)
 	row.expander:SetPoint("LEFT", 3, 0)
@@ -345,21 +338,23 @@ local function CreateRow(index)
 	goal:SetNumeric(true)
 	goal:SetJustifyH("CENTER")
 	local function CommitGoal(self)
-		if row.dyeKey then ns.SetGoal(row.dyeKey, self:GetNumber()) end
+		if row.color then ns.SetGoal(row.color, self:GetNumber()) end
 	end
 	goal:SetScript("OnEnterPressed", function(self) CommitGoal(self); self:ClearFocus() end)
 	goal:SetScript("OnEditFocusLost", CommitGoal)
 	goal:SetScript("OnEscapePressed", function(self) self:ClearFocus(); ns.Refresh() end)
 	row.goalBox = goal
 
-	-- Green check when the goal is already covered by dyes + ready pigment on hand.
-	-- Positioned to the right of the goal box by the column layout (ApplyColumnLayout).
+	-- Green check when the goal is covered by dyes actually HELD. Positioned to the
+	-- right of the goal box by the column layout (ApplyColumnLayout).
 	row.goalCheck = row:CreateTexture(nil, "OVERLAY")
 	row.goalCheck:SetSize(13, 13)
 	row.goalCheck:SetTexture("Interface\\RaidFrame\\ReadyCheck-Ready")
 	row.goalCheck:Hide()
 
-	-- Flower-mode widgets (shown when the row is a flower sub-row) -----------
+	-- Sub-row widgets, shared by the flower rows and the shade rows. Both are an
+	-- icon or swatch, a name, and a line of detail hanging off it, so one set of
+	-- three does for both rather than two sets that would have to stay in step.
 	row.fIcon = row:CreateTexture(nil, "ARTWORK")
 	row.fIcon:SetSize(14, 14)
 	row.fIcon:SetPoint("LEFT", 32, 0) -- clear of the block's left stripe
@@ -373,9 +368,9 @@ local function CreateRow(index)
 	row.fDetail:SetWordWrap(false) -- keep it a single line; never wrap the verdict
 
 	-- Column dividers live ON the row (one per column boundary) so they only show
-	-- on dye rows — the expanded flower rows stay clean, no lines through them.
+	-- on color rows — the expanded sub-rows stay clean, no lines through them.
 	row.seps = {}
-	for i = 1, math.max(#ORDER_BY_TAB.dye, #ORDER_BY_TAB.family) do
+	for i = 1, #ORDER do
 		local s = row:CreateTexture(nil, "ARTWORK")
 		s:SetColorTexture(1, 1, 1, 0.07)
 		s:SetWidth(1)
@@ -384,36 +379,25 @@ local function CreateRow(index)
 
 	row:RegisterForClicks("LeftButtonUp")
 	row:SetScript("OnClick", function()
-		-- Color rows open their family's flowers; dye rows (dye tab only) open their
-		-- own. Same gesture, and on each tab it opens the thing that view is about.
+		-- A color row opens onto its flowers and its shades. Nothing else is clickable.
 		if row.entryKind == "color" and row.color then
 			ns.ToggleColor(row.color)
 			ResetScroll()
-		elseif row.entryKind == "dye" and row.dyeKey and ns.GetTab() == "dye" then
-			local ex = DyeingDownTheHouseDB.ui.expanded
-			ex[row.dyeKey] = (not ex[row.dyeKey]) or nil
-			ns.Refresh()
 		end
 	end)
 	row:SetScript("OnEnter", function()
-		if row.entryKind == "dye" then
-			ShowRowTooltip(row)
-		elseif row.entryKind == "color" then
-			ShowColorTooltip(row)
-		end
+		if row.entryKind == "color" then ShowColorTooltip(row) end
 	end)
 	row:SetScript("OnLeave", GameTooltip_Hide)
 
 	return row
 end
 
--- The three row shapes. Each one owns the name's anchors outright, because the
--- color header hugs its name to leave room for the summary while a dye row runs its
--- name out to the first data column.
+-- The three row shapes: a color row, and the two kinds of sub-row it opens onto.
+-- Each owns the name's anchors outright.
 
--- A color family: expander, swatch, color name, then the family's own columns.
--- These are real cells in the laid-out grid, not a run-on line of text, so they line
--- up under their headers the way the dye tab's numbers do.
+-- A color: expander, swatch, color name, then its columns. These are real cells in
+-- the laid-out grid, not a run-on line of text, so they line up under their headers.
 local BLOCK_FILL = 0.035 -- the expanded panel's tint
 local BLOCK_HEAD = 0.055 -- the opened row itself, a touch stronger
 
@@ -438,36 +422,17 @@ local function SetColorMode(row, open)
 	row.name:SetPoint("LEFT", row.swatch, "RIGHT", 8, 0)
 	row.name:SetPoint("RIGHT", row, "RIGHT", layout.name_r or -180, 0)
 	for key, fs in pairs(row.cells) do fs:SetShown(layout[key] ~= nil) end
-	row.goalBox:Hide(); row.goalCheck:Hide()
-	for i, s in ipairs(row.seps) do s:SetShown(i <= sepCount) end
-	row.fIcon:Hide(); row.fName:Hide(); row.fDetail:Hide()
-end
-
--- One dye. On the family tab it never appears; on the dye tab it's the whole list,
--- with an expander for its own flowers.
-local function SetDyeMode(row, indented, open)
-	ClearBlockChrome(row, open)
-	row.expander:SetShown(not indented)
-	row.swatch:SetShown(not indented)
-	row.name:Show()
-	row.name:ClearAllPoints()
-	row.name:SetWidth(0) -- released, so the RIGHT anchor governs again
-	if indented then
-		row.name:SetPoint("LEFT", row, "LEFT", 30, 0)
-	else
-		row.name:SetPoint("LEFT", row.swatch, "RIGHT", 8, 0)
-	end
-	row.name:SetPoint("RIGHT", row, "RIGHT", layout.name_r or -180, 0)
-	for key, fs in pairs(row.cells) do fs:SetShown(layout[key] ~= nil) end
+	-- The goal box lives on the color row now. It used to be a per-dye field, and
+	-- there is no per-dye any more: you stock a color.
 	row.goalBox:SetShown(layout.goal ~= nil)
 	for i, s in ipairs(row.seps) do s:SetShown(i <= sepCount) end
 	row.fIcon:Hide(); row.fName:Hide(); row.fDetail:Hide()
 end
 
--- `color` tints the block's stripe to the family the flowers belong to; `last` closes
--- the bottom edge, so a run of flower rows reads as one panel hanging off the row
--- above rather than as more list items with broken columns.
-local function SetFlowerMode(row, color, last)
+-- A sub-row: a flower, or a shade. `color` tints the block's stripe to the family
+-- it belongs to; `last` closes the bottom edge, so a run of them reads as one panel
+-- hanging off the row above rather than as more list items with broken columns.
+local function SetSubMode(row, color, last)
 	row.expander:Hide(); row.swatch:Hide(); row.name:Hide()
 	for _, fs in pairs(row.cells) do fs:Hide() end
 	row.goalBox:Hide(); row.goalCheck:Hide()
@@ -483,7 +448,7 @@ local function SetFlowerMode(row, color, last)
 	row.stripe:Show()
 	row.capBottom:SetColorTexture(1, 1, 1, 0.22)
 	row.capBottom:SetShown(last and true or false)
-	-- Nothing happens when you click a flower, so don't imply otherwise.
+	-- Nothing happens when you click a sub-row, so don't imply otherwise.
 	row.hl:SetAlpha(0)
 end
 
@@ -552,7 +517,7 @@ function ns.ApplyColumnLayout()
 		local L = layout[key]
 		if L then
 			h:ClearAllPoints()
-			h:SetPoint("TOPRIGHT", frame, "TOPRIGHT", L.r + ROW_RIGHT, -96)
+			h:SetPoint("TOPRIGHT", frame, "TOPRIGHT", L.r + ROW_RIGHT, -HEADER_Y)
 			h:SetWidth(L.w)
 			h:Show()
 		else
@@ -586,9 +551,8 @@ local function Layout()
 	end
 end
 
--- The dye tab's Pigment/Flowers cells read "held (dyes craftable)": how many of that
--- color's pigment / flowers the account holds, and in parentheses how many of THIS
--- dye that stock could produce right now.
+-- The Flowers cell reads "held (dyes makeable)": how many flowers of that color the
+-- account holds, and in parentheses how many dyes that stock would make right now.
 local function HeldCell(held, dyes)
 	local text = ("%d (%d)"):format(held, dyes)
 	if dyes > 0 then return text, 0.65, 0.95, 0.65 end   -- can make some now
@@ -599,68 +563,36 @@ end
 local function CellValue(key, dye, rc)
 	if key == "owned" then
 		return ns.GetTotal(dye.key), 1, 1, 1
-	elseif key == "pigment" then
-		return HeldCell(rc and rc.ownedPigments or 0, rc and rc.craftableFromPigments or 0)
 	elseif key == "flowers" then
-		return HeldCell(rc and rc.ownedHerbs or 0, rc and rc.craftableFromHerbs or 0)
+		return HeldCell(rc and rc.ownedHerbs or 0, rc and rc.craftableNow or 0)
+	elseif key == "makeable" then
+		local n = rc and rc.craftableNow or 0
+		if n > 0 then return n, 0.5, 0.87, 0.5 end
+		return n, 0.45, 0.45, 0.45
 	elseif key == "value" then
 		-- What one costs to make — ten of the cheapest flower of its color. There's no
 		-- sale price to show any more (Warband-bound), and this is the number you
-		-- actually compare across dyes now: which of these is cheap to make today.
+		-- actually compare across colors now: which of these is cheap to make today.
 		local c = ns.GetCraftCost(dye.key)
 		local text = c and ("~%s/ea"):format(FormatMoney(c)) or "—"
 		return text, c and 1 or 0.4, c and 0.9 or 0.4, c and 0.4 or 0.4
 	end
 end
 
--- The family tab's cells. One family per row, so these are plain counts — no
--- parenthetical, because there's no individual dye to relate them to.
-local function GroupCellValue(key, group)
-	if key == "gPigment" then
-		local n = group.pigment
-		return n, n > 0 and 1 or 0.45, n > 0 and 1 or 0.45, n > 0 and 1 or 0.45
-	elseif key == "gFlowers" then
-		local n = group.flowers
-		return n, n > 0 and 1 or 0.45, n > 0 and 1 or 0.45, n > 0 and 1 or 0.45
-	elseif key == "gMakeable" then
-		local n = group.makeable
-		if n > 0 then return n, 0.5, 0.87, 0.5 end
-		return n, 0.45, 0.45, 0.45
-	elseif key == "gShort" then
-		-- Blank rather than "0": a family you're on top of should be quiet, so the
-		-- ones needing work are the only thing in that column.
-		if (group.short or 0) == 0 then return "", 0.45, 0.45, 0.45 end
-		return group.short, 0.91, 0.64, 0.24
-	end
-end
-
 function ns.Refresh()
-	-- Keep the Dye Crafting window's markers in sync even if our window is hidden.
-	if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end
 	if not frame or not frame:IsShown() then return end
 	-- Collapsed to the title bar: don't touch the list (it re-shows the scroll frame,
 	-- which would spill the rows out below the short bar on any bag/loot refresh).
 	if DyeingDownTheHouseDB.ui.collapsed then return end
 
-	-- Each tab sorts a different thing — the dye list sorts dyes, the family list
-	-- sorts color families — so which sort a header reflects depends on the tab.
-	local family = (ns.GetTab() == "family")
-	local sort, dir
-	if family then sort, dir = ns.GetGroupSort() else sort, dir = ns.GetSort() end
-
-	if tabButtons then
-		for key, btn in pairs(tabButtons) do btn:SetActive(key == ns.GetTab()) end
-	end
-	if headers.name then
-		headers.name.label = family and "Color" or "Dye"
-	end
+	local sort, dir = ns.GetSort()
 
 	-- Sort caret is a real sprite (a scrollbar arrow atlas), tinted to the accent and
 	-- flipped 180° for descending. A rotatable Texture means one "up" atlas covers
 	-- both directions. Only clients missing the atlas fall back to an ASCII caret.
 	local fallback = (dir == "asc") and " ^" or " v"
 	for _, h in pairs(headers) do
-		local on = ((family and h.groupSort or h.sort) == sort)
+		local on = (h.sort == sort)
 		if h.arrow then
 			h.fs:SetText(h.label)
 			if on then
@@ -681,42 +613,58 @@ function ns.Refresh()
 		h.fs:SetTextColor(on and ACCENT[1] or 0.75, on and ACCENT[2] or 0.75, on and ACCENT[3] or 0.75)
 	end
 
-	-- Build the flat entry list for whichever tab is on top.
+	-- Build the flat entry list: one color row per family, and when a family is open,
+	-- its flowers followed by the shades it paints.
 	local hideCostly = DyeingDownTheHouseDB.ui.hideCostlyFlowers
+	local showShades = DyeingDownTheHouseDB.ui.showShades ~= false
 	local entries = {}
 
 	-- Marks the ends of each expanded run so the UI can cap the block. Done here
-	-- rather than while drawing because the hideCostly filter decides which flower is
-	-- actually last.
-	local function AddFlowers(breakdown, color)
-		local from = #entries + 1
-		for _, fl in ipairs(breakdown and breakdown.flowers or {}) do
-			-- Optionally hide flowers that aren't the cheapest way into this color.
-			-- (isCheapest == false means dearer; nil means unpriced — keep those.)
-			if not (hideCostly and fl.isCheapest == false) then
-				entries[#entries + 1] = { kind = "flower", flower = fl, color = color }
-			end
-		end
+	-- rather than while drawing, because the filters decide which sub-row is last.
+	local function CloseBlock(from)
 		if #entries >= from then
 			entries[from].first = true
 			entries[#entries].last = true
 		end
 	end
 
-	if ns.GetTab() == "family" then
-		-- One row per color, opening onto the flowers that family mills from. No dye
-		-- rows: this view is about the shared pool, and the dyes are a tab away.
-		for _, group in ipairs(ns.GetDisplayGroups()) do
-			local open = ns.IsColorExpanded(group.color)
-			entries[#entries + 1] = { kind = "color", group = group, color = group.color, open = open }
-			if open then AddFlowers(ns.GetColorCraftBreakdown(group.color), group.color) end
-		end
-	else
-		-- The flat per-dye list, each dye opening onto its own flowers.
-		local expanded = DyeingDownTheHouseDB.ui.expanded or {}
-		for _, dye in ipairs(ns.GetDisplayDyes()) do
-			entries[#entries + 1] = { kind = "dye", dye = dye, top = true, open = expanded[dye.key] }
-			if expanded[dye.key] then AddFlowers(ns.GetCraftBreakdown(dye.key), dye.color) end
+	for _, dye in ipairs(ns.GetDisplayDyes()) do
+		local color = dye.color
+		local open = ns.IsColorExpanded(color)
+		entries[#entries + 1] = { kind = "color", dye = dye, color = color, open = open }
+		if open then
+			local from = #entries + 1
+
+			local breakdown = ns.GetColorCraftBreakdown(color)
+			for _, fl in ipairs(breakdown and breakdown.flowers or {}) do
+				-- Optionally hide flowers that aren't the cheapest way into this color.
+				-- (isCheapest == false means dearer; nil means unpriced — keep those.)
+				if not (hideCostly and fl.isCheapest == false) then
+					entries[#entries + 1] = { kind = "flower", flower = fl, color = color }
+				end
+			end
+
+			-- Then the shades this color paints. A search pulls its matches to the front
+			-- of them: when someone types "obsidium", the one line they came for should
+			-- not be nineteen rows down inside the block.
+			if showShades then
+				local matched = ns.MatchedShades and ns.MatchedShades(color)
+				local hit, ordered = {}, {}
+				for _, shade in ipairs(matched or {}) do
+					hit[shade.name] = true
+					ordered[#ordered + 1] = shade
+				end
+				for _, shade in ipairs(ns.shadesByColor[color] or {}) do
+					if not hit[shade.name] then ordered[#ordered + 1] = shade end
+				end
+				for _, shade in ipairs(ordered) do
+					entries[#entries + 1] = {
+						kind = "shade", shade = shade, color = color, matched = hit[shade.name],
+					}
+				end
+			end
+
+			CloseBlock(from)
 		end
 	end
 
@@ -760,7 +708,8 @@ function ns.Refresh()
 		local row = rows[i]
 		local e = (i <= visible) and entries[i + offset] or nil
 		if e and e.kind == "color" then
-			row.entryKind, row.dyeKey, row.color = "color", nil, e.color
+			local dye = e.dye
+			row.entryKind, row.color = "color", e.color
 			SetColorMode(row, e.open)
 			row.expander:SetTexture(e.open
 				and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
@@ -768,27 +717,6 @@ function ns.Refresh()
 			row.swatch:SetColorTexture(sw[1], sw[2], sw[3])
 			row.name:SetText(e.color:gsub("^%l", string.upper))
 			row.name:SetTextColor(1, 0.82, 0)
-			for key, fs in pairs(row.cells) do
-				if layout[key] then
-					local text, r, g, b = GroupCellValue(key, e.group)
-					if text ~= nil then fs:SetText(text); fs:SetTextColor(r, g, b) end
-				end
-			end
-			if GameTooltip:IsOwned(row) then ShowColorTooltip(row) end
-			row:Show()
-
-		elseif e and e.kind == "dye" then
-			local dye = e.dye
-			row.entryKind, row.dyeKey, row.color = "dye", dye.key, nil
-			SetDyeMode(row, not e.top, e.open)
-			if e.top then
-				row.expander:SetTexture(e.open
-					and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
-				local sw = SWATCH[dye.color] or { 0.6, 0.6, 0.6 }
-				row.swatch:SetColorTexture(sw[1], sw[2], sw[3])
-			end
-			row.name:SetText(dye.name)
-			row.name:SetTextColor(0.92, 0.92, 0.92)
 
 			local rc = ns.GetRecipeStatus(dye.key)
 			for key, fs in pairs(row.cells) do
@@ -801,30 +729,31 @@ function ns.Refresh()
 				local gval = ns.GetGoal(dye.key)
 				row.goalBox:SetText(gval > 0 and gval or "")
 			end
-			-- Goal met means you HOLD them. Pigment in hand deliberately does not count:
-			-- when it did, a dye could show a green tick here while the family row
-			-- counted it short and the crafting window flagged it to craft — three
-			-- answers for one dye. Whether pigment can close the gap is what the
-			-- Makeable column is for.
+			-- Goal met means you HOLD them. Flowers that could still become dyes
+			-- deliberately don't count: when stock-in-hand did count, a color could show
+			-- a green tick here while its own Makeable column was still telling you to
+			-- go and make some. One definition, and Makeable answers the other question.
 			local covered = layout.goal and rc and rc.goal > 0 and rc.owned >= rc.goal
 			row.goalCheck:SetShown(covered and true or false)
-			if GameTooltip:IsOwned(row) then ShowRowTooltip(row) end
+			if GameTooltip:IsOwned(row) then ShowColorTooltip(row) end
 			row:Show()
 
 		elseif e and e.kind == "flower" then
 			local fl = e.flower
-			row.entryKind, row.dyeKey, row.color = "flower", nil, nil
-			SetFlowerMode(row, e.color, e.last)
+			row.entryKind, row.color = "flower", nil
+			SetSubMode(row, e.color, e.last)
 			local icon = C_Item and C_Item.GetItemIconByID and fl.id and C_Item.GetItemIconByID(fl.id)
 			row.fIcon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+			row.fIcon:SetVertexColor(1, 1, 1)
 			row.fName:SetText(fl.name)
+			row.fName:SetTextColor(1, 0.82, 0)
 
 			local parts = { ("%d held"):format(fl.have),
 				("makes %d %s"):format(fl.dyesEach, fl.dyesEach == 1 and "dye" or "dyes") }
 			if fl.craftCost then
 				-- Color the craft cost itself: green on the cheapest way into this color,
 				-- red on a dearer one, default when nothing here is priced yet to compare.
-				local craft = FormatMoney(fl.craftCost) .. " to craft"
+				local craft = FormatMoney(fl.craftCost) .. " to make"
 				if fl.isCheapest == true then craft = "|cff66dd66" .. craft .. "|r"
 				elseif fl.isCheapest == false then craft = "|cffdd6666" .. craft .. "|r" end
 				parts[#parts + 1] = craft
@@ -832,8 +761,32 @@ function ns.Refresh()
 			row.fDetail:SetText(table.concat(parts, "   ·   "))
 			row:Show()
 
+		elseif e and e.kind == "shade" then
+			-- A shade is a color you can paint, not a thing you can hold — so it gets a
+			-- plain swatch rather than an item icon, and no counts. Reusing the flower
+			-- row's three widgets keeps the block visually of a piece.
+			local shade = e.shade
+			row.entryKind, row.color = "shade", nil
+			SetSubMode(row, e.color, e.last)
+			row.fIcon:SetTexture("Interface\\Buttons\\WHITE8X8")
+			local sw = SWATCH[e.color] or { 0.6, 0.6, 0.6 }
+			row.fIcon:SetVertexColor(sw[1], sw[2], sw[3])
+			row.fName:SetText(shade.name)
+			-- A search match is the row the player came for, so it's the one lit up.
+			if e.matched then
+				row.fName:SetTextColor(1, 1, 1)
+			else
+				row.fName:SetTextColor(0.72, 0.72, 0.76)
+			end
+			-- `guess` means Data.lua inferred which family this shade belongs to rather
+			-- than reading it from the game. Saying so is the whole point of the flag:
+			-- an unverified placement that looks identical to a verified one is worse
+			-- than not showing it, because nobody would ever think to check it.
+			row.fDetail:SetText(shade.guess and "|cff8a8a94family not confirmed|r" or "")
+			row:Show()
+
 		else
-			row.entryKind, row.dyeKey, row.color = nil, nil, nil
+			row.entryKind, row.color = nil, nil
 			row:Hide()
 		end
 	end
@@ -843,9 +796,7 @@ end
 -- Headers
 --------------------------------------------------------------------------------
 
--- `sortMode` sorts DYES, `groupMode` sorts color FAMILIES. The name header carries
--- both, because it heads the dye list on one tab and the color list on the other.
-local function MakeHeader(key, label, sortMode, groupMode)
+local function MakeHeader(key, label, sortMode)
 	local btn = CreateFrame("Button", nil, frame)
 	btn:SetSize(COLDEF[key] and COLDEF[key].w or 120, 16)
 	btn.fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -854,7 +805,6 @@ local function MakeHeader(key, label, sortMode, groupMode)
 	btn.fs:SetText(label)
 	btn.label = label
 	btn.sort = sortMode
-	btn.groupSort = groupMode
 	btn.leftJustified = (key == "name")
 	-- A real sprite for the sort caret (Refresh points it up or down).
 	local a = btn:CreateTexture(nil, "OVERLAY")
@@ -865,11 +815,7 @@ local function MakeHeader(key, label, sortMode, groupMode)
 	btn.arrow = a
 	btn.hint = COLDEF[key] and COLDEF[key].hint
 	btn:SetScript("OnClick", function()
-		if ns.GetTab() == "family" then
-			if groupMode then ns.CycleGroupSort(groupMode) end
-		elseif sortMode then
-			ns.CycleSort(sortMode)
-		end
+		if sortMode then ns.CycleSort(sortMode) end
 		ResetScroll(); ns.Refresh()
 	end)
 	btn:SetScript("OnEnter", function()
@@ -1037,66 +983,15 @@ function ns.BuildUI()
 		ns.Refresh()
 	end)
 
-	-- Headers
-	-- Tabs. Hand-built rather than PanelTabButtonTemplate: the stock tab art is sized
-	-- and tinted for Blizzard's parchment frames and reads badly on this dark one, and
-	-- a template rename in a future patch would take the whole window with it.
-	do
-		local function MakeTab(key, label, anchor)
-			local btn = CreateFrame("Button", nil, frame)
-			btn:SetSize(112, 20)
-			if anchor then
-				btn:SetPoint("LEFT", anchor, "RIGHT", 4, 0)
-			else
-				btn:SetPoint("TOPLEFT", 14, -64)
-			end
-			btn.bg = btn:CreateTexture(nil, "BACKGROUND")
-			btn.bg:SetAllPoints()
-			btn.fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-			btn.fs:SetAllPoints()
-			btn.fs:SetJustifyH("CENTER")
-			btn.fs:SetText(label)
-			function btn:SetActive(active)
-				self.active = active
-				if active then
-					self.bg:SetColorTexture(ACCENT[1] * 0.35, ACCENT[2] * 0.30, ACCENT[3] * 0.45, 0.9)
-					self.fs:SetTextColor(1, 1, 1)
-				else
-					self.bg:SetColorTexture(1, 1, 1, 0.04)
-					self.fs:SetTextColor(0.62, 0.62, 0.66)
-				end
-			end
-			btn:SetScript("OnClick", function()
-				ns.SetTab(key)
-				-- The tabs have different columns and different row counts, so neither the
-				-- old layout nor the old scroll offset means anything on the new one.
-				ns.ApplyColumnLayout()
-				ResetScroll()
-				ns.Refresh()
-			end)
-			btn:SetScript("OnEnter", function(self)
-				if not self.active then self.fs:SetTextColor(0.9, 0.9, 0.9) end
-			end)
-			btn:SetScript("OnLeave", function(self) self:SetActive(self.active) end)
-			btn:SetActive(false)
-			return btn
-		end
-
-		tabButtons = {}
-		tabButtons.family = MakeTab("family", "By Color Family", nil)
-		tabButtons.dye = MakeTab("dye", "By Dye", tabButtons.family)
-	end
-
-	-- The leftmost header changes label with the tab (Dye / Color) and sorts whichever
-	-- list is showing.
-	local dyeHead = MakeHeader("name", "Dye", "alpha", "color")
+	-- Headers. The tab strip that used to sit above these is gone with the second
+	-- view; the list starts straight under the search box now.
+	local dyeHead = MakeHeader("name", "Color", "alpha")
 	dyeHead:ClearAllPoints()
-	dyeHead:SetPoint("TOPLEFT", 30, -96)
+	dyeHead:SetPoint("TOPLEFT", 30, -HEADER_Y)
 	dyeHead:SetWidth(120)
-	-- Every column of every tab gets a header; ApplyColumnLayout shows only the ones
-	-- the active tab lays out.
+	-- Every column gets a header; ApplyColumnLayout shows only the ones laid out.
 	for key, def in pairs(COLDEF) do
-		MakeHeader(key, def.header, def.sort, def.groupSort)
+		MakeHeader(key, def.header, def.sort)
 	end
 
 	-- Scroll + rows
@@ -1129,8 +1024,7 @@ function ns.BuildUI()
 	end)
 
 	-- Everything hidden when collapsed to the title bar (headers handled separately).
-	frame.contentWidgets = { searchBox, sLabel, clear, opts, scanBtn, scroll, grip,
-		tabButtons.family, tabButtons.dye }
+	frame.contentWidgets = { searchBox, sLabel, clear, opts, scanBtn, scroll, grip }
 
 	ns.RestorePosition()
 	ns.ApplyColumnLayout()

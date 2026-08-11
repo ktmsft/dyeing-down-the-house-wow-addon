@@ -1,12 +1,10 @@
 # Dyeing Down The House
 
-Write it down without leaving the house.
-
-You're hours deep into decorating. The wall wants a warmer green. You go to apply it —
-you're out.
+You're hours deep into decorating. The Square Woolen Rug wants a warmer green — and
+when you go to apply it, you're out.
 
 So off you go to fix that. And somewhere between the Dye Station, the auction house
-and the bank alt, it's gone: how many did you need? Two? Six? And which of the
+and the bank alt, you get lost... how many did you need? Two? Six? And which of the
 fifteen flowers that make green is the cheap one this week?
 
 Back to the house to check. Again.
@@ -14,9 +12,9 @@ Back to the house to check. Again.
 Dyeing Down The House lets you write it down the second you notice — then remembers
 it for you, prices it, and tells you the cheapest way to make it.
 
-## 🏠 Note it down while you're standing right there
+## 🏠 Note it down in your house while you're decorating
 
-Select a dye on a piece of decor and a **Dye Needed** box appears in the panel, just
+Select a dye on a piece of decor and a **Dye Needed** box appears in the default panel, just
 above the Cost line. Type how many you want. Done — you can go back to decorating.
 
 No alt-tabbing to a spreadsheet, no "I'll remember." The number is captured at the
@@ -35,17 +33,16 @@ Color       Have   Flowers   Makeable   Cost      Dye Needed
 ```
 
 Open a color and you get two things: the flowers it's made from, cheapest first, and
-every shade that color paints — all 77 of them, so you can see that one Blue Housing
-Dye covers Alliance Blue, Midnight Blue, Tranquility Blue and the rest.
+every shade that color paints — all 77 of them, so you can see at a glance that one
+Blue Housing Dye covers Alliance Blue, Midnight Blue, Tranquility Blue and the rest.
 
 "Have" means **everything** — every character's bags, every character's bank, and the
 Warband bank, all totalled. That green you were sure you were out of might be sitting
 on the alt you never play.
 
 A green check appears next to a goal once you actually hold that many. Flowers that
-could still become dyes deliberately don't count toward it — that's what Makeable is
-for, and one number saying two different things is how you end up not trusting
-either.
+could still become dyes don't tick it off early — you haven't made them yet. Whether
+your stock *can* close the gap is what the Makeable column is for.
 
 ## 💰 Then it tells you the cheapest way to make it
 
@@ -118,11 +115,22 @@ and collapses to a slim title bar if you'd rather tuck it away than close it.
 
 `/dyes` and `/ddth` work too.
 
-## 🌱 Optional: DataStore
+## 🌱 Plays nicely with what you already run
 
-Already run [DataStore](https://www.curseforge.com/wow/addons/datastore) and
-DataStore_Containers? Dyes held by characters you haven't logged into this session
-get counted too. Entirely optional — the addon works fine on its own.
+None of these are required. If you happen to have them, they make it better.
+
+💰 **[TradeSkillMaster](https://www.curseforge.com/wow/addons/tradeskill-master)** or
+**[Auctionator](https://www.curseforge.com/wow/addons/auctionator)** — prices come
+straight from their database instead of scanning: instant, anywhere in the world, no
+auction house trip. Have both? Pick one in the options or with `/dye source`. Leave it
+on automatic and it just uses whichever you've got.
+
+🎒 **[DataStore](https://www.curseforge.com/wow/addons/datastore)** +
+DataStore_Containers — dyes held by characters you haven't logged into this session
+get counted too.
+
+Without any of them the addon still does everything: it scans the auction house
+itself, and counts every character it has seen.
 
 ## 📦 Install
 

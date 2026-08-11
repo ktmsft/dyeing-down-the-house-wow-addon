@@ -7,8 +7,13 @@
 
     Version comes from the .toc, so the zip name and the addon can never disagree.
 
-    Left out: the dev loader (DyeingDownTheHouseDev.toc), tools/, .git, dist/, and
-    the README (that is the GitHub page).
+    Left out: the dev loader (DyeingDownTheHouseDev.toc), tools/, tests/,
+    reference/, .git, dist/, and the two docs that are web pages rather than
+    shipped files (README.md is the GitHub page, CURSEFORGE.md the store one).
+
+    The exclude list is a DENY list, so anything new in the repo root ships by
+    default. That is the safer way round for source files and the wrong way round
+    for notes -- add new non-shipping folders here when you add them.
 
     Usage:  pwsh tools/build.ps1
 #>
@@ -23,8 +28,8 @@ $toc     = Get-Content (Join-Path $repo "$folder.toc") -Encoding UTF8
 $version = ($toc | Select-String -Pattern '^##\s*Version:\s*(.+?)\s*$').Matches[0].Groups[1].Value
 if (-not $version) { throw "Could not read ## Version from $folder.toc" }
 
-$exclude = @('.git', '.gitignore', '.claude', 'dist', 'tools',
-             'README.md', "${folder}Dev.toc")
+$exclude = @('.git', '.gitignore', '.claude', 'dist', 'tools', 'tests', 'reference',
+             'README.md', 'CURSEFORGE.md', "${folder}Dev.toc")
 
 Write-Host "Building $folder $version ..."
 
