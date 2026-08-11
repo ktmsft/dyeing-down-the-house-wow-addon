@@ -33,7 +33,10 @@ local MAXROWS = 40
 -- Shade names run long ("Netherstorm Fuchsia", "Hinterlands Hickory"), so two
 -- across is the most that fits without truncating at the window's narrowest.
 local SHADE_COLS = 2
-local HEIGHT_MIN, HEIGHT_MAX = 200, 900
+-- The minimum has to clear TOP_INSET + BOT_INSET and still leave room for several
+-- rows. It was 200 when the header block was 26px shorter; at that size the list
+-- had shrunk to three rows and the window read as broken rather than as small.
+local HEIGHT_MIN, HEIGHT_MAX = 260, 900
 -- The window has a natural "column-fit" width (see ComputeFrameWidth). The user may
 -- drag it narrower or wider within this slack: shrinking is capped so the leftmost
 -- data header can't collide with the "Dye" header; growing is capped so the flexible
@@ -345,17 +348,24 @@ local function CreateRow(index)
 
 	row.cells = {}
 	for key in pairs(COLDEF) do
-		if key ~= "goal" and key ~= "shadeGoal" then
+		-- Every column is a plain font string now except the shade tab's entry box.
+		-- `goal` used to be an edit box here too; on the family tab it is a DERIVED
+		-- total, so it is drawn like any other number and there is nothing to type.
+		if key ~= "shadeGoal" then
 			local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 			fs:SetJustifyH("CENTER")
+			-- Never wrap. A cell has a fixed width and one line of room, and a price
+			-- like "~10000g/ea" wrapping onto a second line pushes itself out of its
+			-- own row. Truncation is ugly; overflowing into the row below is worse.
+			fs:SetWordWrap(false)
 			row.cells[key] = fs
 		end
 	end
 
-	-- The shade tab's own entry box. Kept separate from the family tab's `goalBox`
-	-- rather than reused: one is editable and one is a derived total, and sharing a
-	-- widget between "you type here" and "this is computed" is how a read-only value
-	-- ends up looking editable.
+	-- The shade tab's entry box, and the only one in the window. The family tab's
+	-- Dye Needed is a derived total and is drawn as a plain number -- sharing a
+	-- widget between "you type here" and "this is computed" is how a read-only
+	-- value ends up looking editable.
 	local shadeGoal = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
 	shadeGoal:SetHeight(ROW_H - 6)
 	shadeGoal:SetAutoFocus(false)
@@ -372,19 +382,6 @@ local function CreateRow(index)
 	shadeGoal:SetScript("OnEditFocusLost", CommitShade)
 	shadeGoal:SetScript("OnEscapePressed", function(self) self:ClearFocus(); ns.Refresh() end)
 	row.shadeGoalBox = shadeGoal
-
-	local goal = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-	goal:SetHeight(ROW_H - 6)
-	goal:SetAutoFocus(false)
-	goal:SetNumeric(true)
-	goal:SetJustifyH("CENTER")
-	local function CommitGoal(self)
-		if row.color then ns.SetGoal(row.color, self:GetNumber()) end
-	end
-	goal:SetScript("OnEnterPressed", function(self) CommitGoal(self); self:ClearFocus() end)
-	goal:SetScript("OnEditFocusLost", CommitGoal)
-	goal:SetScript("OnEscapePressed", function(self) self:ClearFocus(); ns.Refresh() end)
-	row.goalBox = goal
 
 	-- Green check when the goal is covered by dyes actually HELD. Positioned to the
 	-- right of the goal box by the column layout (ApplyColumnLayout).
@@ -493,9 +490,8 @@ local function SetColorMode(row, open)
 	row.name:SetPoint("LEFT", row.swatch, "RIGHT", 8, 0)
 	row.name:SetPoint("RIGHT", row, "RIGHT", layout.name_r or -180, 0)
 	for key, fs in pairs(row.cells) do fs:SetShown(layout[key] ~= nil) end
-	-- The family's total is DERIVED, so it is drawn as a number rather than typed
-	-- into. The editable one is on the By Dye tab.
-	row.goalBox:Hide()
+	-- The family's total is DERIVED, so it is drawn as a number like the rest. The
+	-- editable one is on the By Dye tab.
 	row.shadeGoalBox:Hide()
 	for i, s in ipairs(row.seps) do s:SetShown(i <= sepCount) end
 	row.fIcon:Hide(); row.fName:Hide(); row.fDetail:Hide()
@@ -515,7 +511,7 @@ end
 local function SetSubMode(row, color, last)
 	row.expander:Hide(); row.swatch:Hide(); row.name:Hide()
 	for _, fs in pairs(row.cells) do fs:Hide() end
-	row.goalBox:Hide(); row.goalCheck:Hide(); row.shadeGoalBox:Hide()
+	row.goalCheck:Hide(); row.shadeGoalBox:Hide()
 	-- No column dividers: this block has no columns, and drawing them here is exactly
 	-- what made the layout look broken.
 	for _, s in ipairs(row.seps) do s:Hide() end
@@ -562,21 +558,19 @@ function ns.ApplyColumnLayout()
 	for _, row in ipairs(rows) do
 		for key, def in pairs(COLDEF) do
 			local L = layout[key]
-			local widget = (key == "goal" and row.goalBox)
-				or (key == "shadeGoal" and row.shadeGoalBox)
-				or row.cells[key]
+			local widget = (key == "shadeGoal" and row.shadeGoalBox) or row.cells[key]
 			widget:ClearAllPoints()
 			if L then
 				if key == "shadeGoal" then
 					widget:SetSize(L.w - 8, ROW_H - 6)
 					widget:SetPoint("RIGHT", row, "RIGHT", L.r - 4, 0)
 				elseif key == "goal" then
-					-- A narrow entry field with the achieved-check tucked to its right:
-					-- the check sits at the column's right edge, the box just left of it.
+					-- The total, with the achieved-check tucked to its right: the check
+					-- sits at the column's right edge and the number just left of it.
 					local CHECK_SLOT = 16
 					row.goalCheck:ClearAllPoints()
 					row.goalCheck:SetPoint("RIGHT", row, "RIGHT", L.r - 3, 0)
-					widget:SetSize(L.w - 6 - CHECK_SLOT, ROW_H - 6)
+					widget:SetWidth(L.w - CHECK_SLOT)
 					widget:SetPoint("RIGHT", row.goalCheck, "LEFT", -3, 0)
 				else
 					widget:SetPoint("RIGHT", row, "RIGHT", L.r, 0)
@@ -628,9 +622,20 @@ end
 -- Layout (visible-row count) and Refresh
 --------------------------------------------------------------------------------
 
+-- How many rows fit right now. Read from the scroll frame every time rather than
+-- cached, because a cached value is only right until the next thing that changes
+-- the height — and when it went stale at 1, the window showed a single row with
+-- an acre of empty space under it and looked like the list had emptied.
+--
+-- It is cheap (one GetHeight and a divide), and being derived at the moment of use
+-- means there is no longer a "did anyone remember to call Layout" question.
+local function VisibleRows()
+	local h = scroll and scroll:GetHeight() or 0
+	return math.max(1, math.min(MAXROWS, math.floor(h / ROW_H)))
+end
+
 local function Layout()
-	local h = scroll:GetHeight()
-	visible = math.max(1, math.min(MAXROWS, math.floor(h / ROW_H)))
+	visible = VisibleRows()
 	for i = 1, MAXROWS do
 		if rows[i] then rows[i]:SetShown(false) end
 	end
@@ -813,6 +818,10 @@ function ns.Refresh()
 		end
 	end
 
+	-- Recomputed here, not trusted from the last Layout(): a drag, a tab switch and
+	-- a column change all move the height, and only one of them went through Layout.
+	visible = VisibleRows()
+
 	FauxScrollFrame_Update(scroll, #entries, visible, ROW_H)
 	scroll:Show() -- FauxScrollFrame_Update hides it when the list fits; keep rows visible
 	local offset = FauxScrollFrame_GetOffset(scroll)
@@ -840,8 +849,10 @@ function ns.Refresh()
 					if text ~= nil then fs:SetText(text); fs:SetTextColor(r, g, b) end
 				end
 			end
-			-- Derived, so it is drawn into the cell rather than typed into a box.
-			if layout.goal and row.cells.goal then
+			-- Derived, so it is drawn like any other number. Blank rather than "0", so
+			-- the colours you have actually asked for are the only ones with anything
+			-- in this column.
+			if layout.goal then
 				local gval = ns.GetGoal(dye.key)
 				row.cells.goal:SetText(gval > 0 and tostring(gval) or "")
 				row.cells.goal:SetTextColor(0.95, 0.82, 0.35)
@@ -885,7 +896,6 @@ function ns.Refresh()
 				end
 			end
 
-			row.goalBox:Hide()
 			row.goalCheck:Hide()
 			if layout.shadeGoal then
 				row.shadeGoalBox:Show()
