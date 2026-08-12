@@ -93,10 +93,23 @@ COLDEF.family = { header = "Color", sort = "family", w = 74,
 COLDEF.shadeGoal = { header = "Dye Needed", sort = "goal", w = 68,
 	hint = "How many of this exact color you want. The family's total is the sum of\nevery shade you've asked for." }
 
+-- What this shade will cost you, which is the cost of its family's dye.
+--
+-- Every shade of a family shows the same number, and that repetition is the point
+-- rather than a flaw: this is the tab where you decide how many Alliance Blue you
+-- want, and the price of wanting one is a thing to know while typing the number,
+-- not after switching tabs to look it up.
+--
+-- Shares the Cost toggle with the other tab's column (see ColShown), because it is
+-- the same column to anyone using it.
+COLDEF.shadeCost = { header = "Cost", sort = "price", w = 78, optional = true,
+	setting = "value",
+	hint = "What one dye of this color's family costs you, by the cheaper of making\nit or buying it. Every shade of a family costs the same dye." }
+
 -- Right to left, per tab.
 local ORDER_BY_TAB = {
 	color = { "goal", "value", "makeable", "flowers", "owned" },
-	dye   = { "shadeGoal", "family" },
+	dye   = { "shadeGoal", "shadeCost", "family" },
 }
 
 local function ActiveOrder()
@@ -178,8 +191,13 @@ end
 --------------------------------------------------------------------------------
 
 local function ColShown(key)
-	if not COLDEF[key].optional then return true end
-	return DyeingDownTheHouseDB.ui.cols[key] ~= false
+	local def = COLDEF[key]
+	if not def.optional then return true end
+	-- `setting` lets two columns share one toggle. The Cost column appears on both
+	-- tabs under different keys (different width, different sort, one is per-family
+	-- and one per-shade), but it is one thing as far as the player is concerned, and
+	-- an options panel with two checkboxes both labelled Cost would be a puzzle.
+	return DyeingDownTheHouseDB.ui.cols[def.setting or key] ~= false
 end
 
 -- The window width is DERIVED from which columns are shown, never dragged: a base
@@ -978,6 +996,25 @@ function ns.Refresh()
 				if layout[key] and key == "family" then
 					fs:SetText(r.color:gsub("^%l", string.upper))
 					fs:SetTextColor(sw[1] * 0.6 + 0.4, sw[2] * 0.6 + 0.4, sw[3] * 0.6 + 0.4)
+				elseif layout[key] and key == "shadeCost" then
+					-- A shade costs one dye of its family, so the family's number IS this
+					-- shade's number. Same wording and same colours as the other tab: the
+					-- column has to mean one thing in both places or it means neither.
+					local cmp = ns.GetCraftVsBuy(r.color)
+					if not cmp or not cmp.best then
+						fs:SetText("—")
+						fs:SetTextColor(0.4, 0.4, 0.4)
+					else
+						local buying = (cmp.buy ~= nil and cmp.best == cmp.buy)
+						fs:SetText(("%s %s"):format(FormatMoney(cmp.best), buying and "buy" or "make"))
+						if cmp.cheaper == "buy" then
+							fs:SetTextColor(0.55, 0.8, 1.0)
+						elseif cmp.cheaper == "craft" then
+							fs:SetTextColor(0.55, 0.9, 0.55)
+						else
+							fs:SetTextColor(0.85, 0.85, 0.85)
+						end
+					end
 				end
 			end
 

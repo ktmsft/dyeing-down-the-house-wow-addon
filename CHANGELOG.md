@@ -19,6 +19,12 @@ Housing Dye" and so on.
   `61g buy`. Hover the row for both numbers and what the difference comes to.
   Where only one of the two is priced it still shows the number, plainly, without
   pretending a comparison happened; scan again and it may well flip.
+- **The Cost column is on the By Dye tab too**, showing what the shade's family
+  dye costs you. Every shade of a family shows the same number, because they all
+  cost the same dye — and that's the tab where you type how many you want, so
+  the price of wanting one belongs in front of you while you're typing it. One
+  Cost setting in the options covers both tabs, and clicking the header sorts by
+  it on either.
 - **The expand view and the flower picker are unchanged**, on purpose. Once you've
   decided to make a dye, which flower to make it from is a different question, and
   it's still the one the game doesn't answer for you. The green check goes on

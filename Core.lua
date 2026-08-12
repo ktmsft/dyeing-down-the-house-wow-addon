@@ -1897,8 +1897,12 @@ end
 -- is where they're set.
 --------------------------------------------------------------------------------
 
-local VALID_SHADE_SORT = { alpha = true, family = true, goal = true }
-local SHADE_DEFAULT_DIR = { alpha = "asc", family = "asc", goal = "desc" }
+-- "price" sorts the shades by what their FAMILY's dye costs, so every shade of a
+-- family lands together at that price. It is the same number the By Color tab
+-- sorts on, which is what keeps the two tabs telling one story.
+local VALID_SHADE_SORT = { alpha = true, family = true, goal = true, price = true }
+-- price ascending, same as the other tab: cheapest to get hold of first.
+local SHADE_DEFAULT_DIR = { alpha = "asc", family = "asc", goal = "desc", price = "asc" }
 
 function ns.GetShadeSort()
 	local ui = DyeingDownTheHouseDB and DyeingDownTheHouseDB.ui or {}
@@ -1981,6 +1985,19 @@ function ns.GetDisplayShades()
 
 	local mode, dir = ns.GetShadeSort()
 	local asc = (dir == "asc")
+	-- Costs are looked up once per row rather than inside the comparator: table.sort
+	-- calls it O(n log n) times, and GetCraftVsBuy walks every flower of the colour
+	-- on each call. With 77 shades that is thousands of walks per refresh.
+	local cost = {}
+	if mode == "price" then
+		for _, r in ipairs(rows) do
+			if cost[r.color] == nil then
+				local cmp = ns.GetCraftVsBuy(r.color)
+				cost[r.color] = (cmp and cmp.best) or false
+			end
+		end
+	end
+
 	table.sort(rows, function(a, b)
 		if mode == "goal" then
 			if a.goal ~= b.goal then
@@ -1989,6 +2006,15 @@ function ns.GetDisplayShades()
 		elseif mode == "family" then
 			if a.index ~= b.index then
 				if asc then return a.index < b.index else return a.index > b.index end
+			end
+		elseif mode == "price" then
+			-- Unpriced families sink to the bottom in BOTH directions, matching the
+			-- other tab. Flipping the sort to find the dearest should not surface the
+			-- ones whose price nobody knows.
+			local ca, cb = cost[a.color], cost[b.color]
+			if (ca ~= false) ~= (cb ~= false) then return ca ~= false end
+			if ca and cb and ca ~= cb then
+				if asc then return ca < cb else return ca > cb end
 			end
 		elseif a.name ~= b.name then
 			if asc then return a.name < b.name else return a.name > b.name end

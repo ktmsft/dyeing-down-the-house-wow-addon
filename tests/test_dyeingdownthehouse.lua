@@ -911,6 +911,47 @@ DyeingDownTheHouseDB.ui.hideZero = true
 check("the shade list is untouched", #ns.GetDisplayShades() > 0, true)
 DyeingDownTheHouseDB.ui.hideZero = false
 
+--------------------------------------------------------------------------------
+-- The By Dye tab sorts on cost too
+--
+-- A shade costs one dye of its family, so its cost IS the family's cost and every
+-- shade of a family sorts together. It is the same number the By Color tab sorts
+-- on, which is what keeps the two tabs telling one story rather than two.
+--------------------------------------------------------------------------------
+
+print("\n-- Shades sort by what their family costs --")
+
+do
+	local function shadeNames(rows)
+		local out = {}
+		for _, r in ipairs(rows) do out[#out + 1] = r.name end
+		return table.concat(out, ",")
+	end
+
+	-- red's flowers make it 4000; blue is bought at 900. Green and white: nothing.
+	ns.SetPrice("rose", 400)
+	ns.SetPrice("blue", 900)
+
+	ns.SetShadeSort("price", "asc")
+	local asc = shadeNames(ns.GetDisplayShades())
+	check("cheapest family first", asc:find("^Azure") ~= nil, true)
+	check("...with the dearer family after it", asc:find("Crimson") > asc:find("Azure"), true)
+
+	-- The families nobody has a price for must stay at the bottom whichever way the
+	-- sort points. Flipping to find the DEAREST should not surface the unknowns.
+	check("unpriced sinks in asc", asc:find("Moss") > asc:find("Crimson"), true)
+	ns.SetShadeSort("price", "desc")
+	local desc = shadeNames(ns.GetDisplayShades())
+	check("...and still sinks in desc", desc:find("Moss") > desc:find("Crimson"), true)
+	check("dearest family leads in desc", desc:find("^Crimson") ~= nil, true)
+
+	ns.SetPrice("rose", nil)
+	ns.SetPrice("blue", nil)
+	ns.SetShadeSort("alpha", "asc")
+	check("with nothing priced the order is stable, not random",
+		shadeNames(ns.GetDisplayShades()), shadeNames(ns.GetDisplayShades()))
+end
+
 print("\n-- Per-color hide list --")
 ns.SetDyeHidden("blue", true)
 check("hidden color is dropped from the display", keys(ns.SortDyes(ns.GetDisplayDyes(), "alpha")), "green,red,white")
