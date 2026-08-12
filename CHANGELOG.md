@@ -2,6 +2,31 @@
 
 All notable changes to Dyeing Down The House are recorded here.
 
+## [2.0.1] — 2026-08-11
+
+Dyes are back on the auction house. 12.1 undid the Warband-binding from the 4
+August patch, so a dye has a price again — one item per color, listed as "Blue
+Housing Dye" and so on.
+
+### Changed
+
+- **Scans price dyes again, alongside the flowers.** 1.3.0 stopped querying them
+  because a Warband-bound dye had no listing to find and the wasted queries were
+  coming out of the budget the flowers needed. Both halves of the recipe are worth
+  asking about again, from the auction house or from TSM or Auctionator.
+- **The Cost column says whether to make one or buy one.** It shows what one costs
+  you by the cheaper of the two routes and which route that is — `82g make` or
+  `61g buy`. Hover the row for both numbers and what the difference comes to.
+  Where only one of the two is priced it still shows the number, plainly, without
+  pretending a comparison happened; scan again and it may well flip.
+- **The expand view and the flower picker are unchanged**, on purpose. Once you've
+  decided to make a dye, which flower to make it from is a different question, and
+  it's still the one the game doesn't answer for you. The green check goes on
+  meaning "cheapest flower for this color" rather than going back to meaning
+  "worth making at all" — one mark, one meaning.
+- If you were told at some point that scans price flowers only, you'll get a note
+  the next time you log in saying that's changed. Once, then never again.
+
 ## [2.0.0] — 2026-08-11 (Curse of Ula'tek, 12.1)
 
 Blizzard rebuilt the dye system in Curse of Ula'tek. Pigments are gone, the 62 dye

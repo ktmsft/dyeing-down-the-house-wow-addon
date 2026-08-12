@@ -55,17 +55,21 @@ could still become dyes deliberately don't count toward it — that's what Makea
 for, and one number saying two different things is how you end up not trusting
 either.
 
-## 💰 Then it tells you the cheapest way to make it
+## 💰 Then it tells you whether to make it or buy it
 
-Dyes are Warband-bound, so you can't buy one and making it is the only route. But
-there are fifteen flowers that make black, they're all still on the auction house,
-and which one is cheapest changes week to week.
+Seventeen flowers make black, and which one is cheapest changes week to week. Since
+12.1 the dye itself is back on the auction house too, so there are two ways to get
+one and they're rarely the same price.
 
-Hit **Scan** and every flower gets priced. The **Cost** column then shows what one
-dye of that color costs to make: ten of its cheapest flower. Open a color and you
-get every flower that makes it — how many you hold, how many dyes that alone would
-make, and what going that route would cost. **Green on the cheapest way in, red on a
-dearer one.** Cheapest first.
+Hit **Scan** and everything gets priced, dyes included. The **Cost** column shows
+what one costs you by the cheaper route and which route that is — `82g make` or
+`61g buy`. Hover the row for both numbers side by side.
+
+Open a color and you get every flower that makes it — how many you hold, how many
+dyes that alone would make, and what going that route would cost. **Green on the
+cheapest way in, red on a dearer one.** Cheapest first. That stays a comparison
+between flowers: once you've decided to make one, which flower to use is the part
+the game still won't tell you.
 
 Already run **TradeSkillMaster** or **Auctionator**? Prices come straight out of
 their database — instantly, anywhere in the world, no auction house trip required.
@@ -93,7 +97,7 @@ with Dark Obsidium and Obsidium Black pulled to the top of the row. The search r
 all 77 shade names, not just the nine items — which is the point, because the shade
 name is the thing you actually had in mind.
 
-Sort by name, amount held, goal, cost to make, how much you could make right now, or
+Sort by name, amount held, goal, what one costs, how much you could make right now, or
 how far off your goal you are.
 
 ## ⚙️ Configurable
@@ -115,7 +119,7 @@ and collapses to a slim title bar if you'd rather tuck it away than close it.
 - `/dye scan` — price the flowers
 - `/dye source <auto|tsm|auctionator|blizzard>` — where prices come from
 - `/dye search <text>` — filter by color, or by a shade name like "obsidium"
-- `/dye sort <alpha | price | owned>` — change the order (price = cost to make)
+- `/dye sort <alpha | price | owned>` — change the order (price = what one costs you, made or bought)
 - `/dye tab <color | dye>` — switch tabs
 - `/dye expand` · `/dye collapse` — open or close every color
 - `/dye hidezero` — hide colors you have no dye of

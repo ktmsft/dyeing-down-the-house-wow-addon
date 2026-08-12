@@ -715,27 +715,105 @@ local rt = ns.RainbowText("ab c")
 check("rainbow adds color codes", rt:find("|cff", 1, true) ~= nil, true)
 check("rainbow keeps the space", rt:find(" ", 1, true) ~= nil, true)
 
-print("\n-- Scan queue prices flowers only --")
--- Dyes are Warband-bound, so a query for one is a guaranteed empty answer on a
--- rate-limited API. Nothing that isn't a flower belongs in the queue.
+print("\n-- Scan queue prices everything tradeable --")
+-- Flowers AND dyes since 12.1 put dyes back on the auction house. The rule the
+-- queue enforces was never "flowers only" -- it is "nothing that cannot have a
+-- price", because on a rate-limited API a guaranteed-empty query is what pushes the
+-- items we do need past the limiter. Between 4 Aug and 12.1 that excluded every
+-- dye; now it excludes nothing but hidden rows.
 do
 	local queue = ns.BuildScanQueue()
-	local nonHerb = 0
+	local dyes, herbs, other = 0, 0, 0
 	for _, id in ipairs(queue) do
 		local e = ns.byID[id]
-		if not e or e.kind ~= "herb" then nonHerb = nonHerb + 1 end
+		if not e then other = other + 1
+		elseif e.kind == "dye" then dyes = dyes + 1
+		elseif e.kind == "herb" then herbs = herbs + 1
+		else other = other + 1 end
 	end
-	check("queue is flowers and nothing else", nonHerb, 0)
+	check("dyes are queued again", dyes > 0, true)
+	check("flowers still are", herbs > 0, true)
+	check("and nothing else is", other, 0)
 end
 
-print("\n-- Sort by price (cost to make; unpriced sinks last) --")
--- rose 400 -> red costs 4000. Nothing else has a priced flower.
+print("\n-- Sort by price (cheaper of make-or-buy; unpriced sinks last) --")
+-- rose 400 -> red costs 4000 to make. Nothing else has a priced flower.
 ns.SetPrice("rose", 400)
-check("price asc (cheapest to make first, unpriced last)",
+check("price asc (cheapest first, unpriced last)",
 	keys(ns.SortDyes(ns.DYES, "price", "asc")), "red,blue,green,white")
 check("price desc still keeps unpriced last",
 	keys(ns.SortDyes(ns.DYES, "price", "desc")), "red,blue,green,white")
+
+-- The order must follow what the Cost column DISPLAYS. Green has no flower priced
+-- but is listed at 900, cheaper than red's 4000 craft -- so green sorts first.
+-- Sorting on craft cost alone would have left green last as "unpriced", in an order
+-- the screen contradicts.
+ns.SetPrice("green", 900)
+check("a buy-only dye sorts on its buy price",
+	keys(ns.SortDyes(ns.DYES, "price", "asc")), "green,red,blue,white")
+ns.SetPrice("red", 2500) -- red is now cheaper to BUY than to make; 2500 > 900
+check("a dye sorts on whichever route is cheaper",
+	keys(ns.SortDyes(ns.DYES, "price", "asc")), "green,red,blue,white")
+ns.SetPrice("green", 3000) -- green dearer than red's 2500 buy
+check("...so the order follows the cheaper number",
+	keys(ns.SortDyes(ns.DYES, "price", "asc")), "red,green,blue,white")
+ns.SetPrice("green", nil)
+ns.SetPrice("red", nil)
 ns.SetPrice("rose", nil)
+
+--------------------------------------------------------------------------------
+-- Make it or buy it
+--
+-- 12.1 put dyes back on the auction house, so the question exists again. It is
+-- answered at the COLOUR and deliberately nowhere further down -- the expand view
+-- and the reagent picker go on comparing flower against flower, because which
+-- flower to use is a separate decision from whether to craft at all.
+--
+-- The case that matters most is the one-sided one. A fresh scan often knows only
+-- half, and a lone number must not be dressed up as a verdict.
+--------------------------------------------------------------------------------
+
+print("\n-- Make it or buy it --")
+
+ns.SetPrice("rose", 400)   -- red's cheapest flower -> 4000 to make
+ns.SetPrice("red", 6000)   -- ...against 6000 to buy
+local cmp = ns.GetCraftVsBuy("red")
+check("craft cost is ten of the cheapest flower", cmp.craft, 4000)
+check("buy price is the dye's own", cmp.buy, 6000)
+check("cheaper of the two wins", cmp.best, 4000)
+check("and is named", cmp.cheaper, "craft")
+
+ns.SetPrice("red", 2500)   -- now buying undercuts making
+cmp = ns.GetCraftVsBuy("red")
+check("buying can win too", cmp.cheaper, "buy")
+check("...and sets best", cmp.best, 2500)
+
+-- One side only: a number, but NOT a comparison.
+ns.SetPrice("red", nil)
+cmp = ns.GetCraftVsBuy("red")
+check("craft known, buy unknown -> still a number", cmp.best, 4000)
+check("...but no verdict is claimed", cmp.cheaper, nil)
+
+ns.SetPrice("rose", nil)
+ns.SetPrice("red", 2500)
+cmp = ns.GetCraftVsBuy("red")
+check("buy known, craft unknown -> still a number", cmp.best, 2500)
+check("...and still no verdict", cmp.cheaper, nil)
+
+ns.SetPrice("red", nil)
+cmp = ns.GetCraftVsBuy("red")
+check("neither known -> nothing to show", cmp.best, nil)
+
+-- An untradeable dye has no buy price to weigh, whatever is stored against it.
+-- This is the path that would run if Blizzard bound dyes again.
+ns.SetPrice("red", 2500)
+ns.DYES_TRADEABLE = false
+cmp = ns.GetCraftVsBuy("red")
+check("an untradeable dye reports no buy price", cmp.buy, nil)
+ns.DYES_TRADEABLE = true
+ns.SetPrice("red", nil)
+
+check("a flower is not a dye and has no verdict", ns.GetCraftVsBuy("rose"), nil)
 
 print("\n-- SortDyes does not mutate the caller's list --")
 check("original DYES order preserved", keys(ns.DYES), "red,green,blue,white")
@@ -845,7 +923,7 @@ do
 	ns.SetAllHerbsHidden(false)
 	local full = ns.BuildScanQueue()
 	local n0 = #full
-	check("queue excludes dyes (Warband-bound)", hasid(full, 900001), false)
+	check("queue includes a dye (tradeable again in 12.1)", hasid(full, 900001), true)
 	check("queue includes a herb (rose)", hasid(full, 900101), true)
 
 	ns.SetHerbHidden("Rose", true) -- name lookup is case-insensitive
@@ -1137,9 +1215,17 @@ for _, entry in ipairs(ns.ITEMS) do
 		if entry.kind == "dye" then sawDye = true end
 	end
 end
-check("Warband-bound dyes are never priced", sawDye, false)
-check("a dye is not priceable", ns.ShouldPriceEntry(ns.byKey.red), false)
+check("dyes are covered again", sawDye, true)
+check("a dye is priceable", ns.ShouldPriceEntry(ns.byKey.red), true)
 check("a flower is", ns.ShouldPriceEntry(ns.byKey.rose), true)
+-- The flag is the single switch the whole rule hangs off, so prove it still turns
+-- the behaviour off as well as on. If Blizzard binds dyes again this is the line
+-- that says one edit is enough -- for the pricing half, which is all it ever
+-- covered.
+ns.DYES_TRADEABLE = false
+check("...and stops being when the flag says so", ns.ShouldPriceEntry(ns.byKey.red), false)
+check("flowers are unaffected by the flag", ns.ShouldPriceEntry(ns.byKey.rose), true)
+ns.DYES_TRADEABLE = true
 
 ns.SetHerbHidden("Iris", true)
 check("a hidden flower is skipped", ns.ShouldPriceEntry(ns.byKey.iris), false)
@@ -1150,11 +1236,13 @@ print("\n-- Importing from TSM --")
 DyeingDownTheHouseDB.prices = {}
 tsmAsked = {}
 local priced, missing = ns.ImportPrices()
-check("priced every flower TSM knew", priced, 2)
-check("the rest are counted, not invented", missing, priceable - 2)
+check("priced everything TSM knew", priced, 3)
+check("the rest are counted, not invented", missing, priceable - 3)
 check("rose took TSM's price", ns.GetPrice("rose"), 420)
 check("poppy took TSM's price", ns.GetPrice("poppy"), 900)
-check("the dye TSM had a price for was never asked", ns.GetPrice("red"), nil)
+-- Was asserted as never-asked while dyes were Warband-bound. TSM had a price for it
+-- the whole time; the addon was declining to look.
+check("the dye TSM had a price for is asked now", ns.GetPrice("red"), 5500)
 check("an item TSM never saw stays unpriced", ns.GetPrice("iris"), nil)
 check("the price records where it came from", ns.GetPriceInfo("rose").source, "tsm")
 check("TSM was asked with the configured key", tsmAsked[1], "DBMarket")
@@ -1460,7 +1548,7 @@ print("\n-- A 12.1 client migrates as normal --")
 function GetBuildInfo() return "12.1.0", "69214", "Aug 2026", 120100 end
 check("the client reports as supported", ns.ClientSupported(), true)
 Fire("ADDON_LOADED", "DyeingDownTheHouse")
-check("now it migrates", DyeingDownTheHouseDB.version, 4)
+check("now it migrates", DyeingDownTheHouseDB.version, 5)
 check("...and the goal moved with it", ns.GetGoal("red"), 5)
 
 print("\n-- An unreadable version counts as supported --")
@@ -1500,7 +1588,7 @@ DyeingDownTheHouseDB = {
 Fire("ADDON_LOADED", "DyeingDownTheHouse")
 
 local db = DyeingDownTheHouseDB
-check("schema version bumped", db.version, 4)
+check("schema version bumped", db.version, 5)
 
 -- GOALS fold by addition: 5 Horde Red + 3 Mahogany is 8 Red Housing Dye, which is
 -- exactly what Hestia's mail does to the items themselves. v4 then moves the
@@ -1553,7 +1641,7 @@ print("\n-- Migrating twice changes nothing --")
 local goalsRed = db.unassigned.red
 Fire("ADDON_LOADED", "DyeingDownTheHouse")
 check("goals are not doubled on a second run", DyeingDownTheHouseDB.unassigned.red, goalsRed)
-check("still at the current version", DyeingDownTheHouseDB.version, 4)
+check("still at the current version", DyeingDownTheHouseDB.version, 5)
 
 print("\n-- A profile already on the current schema is left alone --")
 DyeingDownTheHouseDB = {

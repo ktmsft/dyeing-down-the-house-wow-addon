@@ -67,12 +67,15 @@ COLDEF = {
 		hint = "Flowers of this color you hold, and in ( ) how many dyes they'd make.\nTen of the SAME flower make one dye." },
 	makeable = { header = "Makeable", sort = "craft",   w = 70, optional = true,
 		hint = "Dyes of this color you could make right now from the flowers on hand.\nTen of the SAME flower make one dye, so odd remainders don't add up." },
-	-- Was "Value" — a dye's auction price — until dyes went Warband-bound and stopped
-	-- having one. What's left that's still a number is what it costs to MAKE, so
-	-- that's what the column shows. The key and sort mode keep their old names so
-	-- saved column and sort preferences carry over.
-	value   = { header = "Cost",    sort = "price",     w = 72, optional = true,
-		hint = "What one costs to make: ten of this color's cheapest flower.\n(Dyes are Warband-bound, so there's no price to buy one at.)" },
+	-- Was "Value" — a dye's auction price — then "Cost", what it takes to make one,
+	-- when Warband-bound dyes stopped having a price. 12.1 gave the price back, so
+	-- the column answers both at once: what one costs you by the cheaper of the two
+	-- routes, and which route that is. Still "Cost", because that is what it is.
+	--
+	-- The key and sort mode keep their original names through all of it, so saved
+	-- column and sort preferences carry over rather than silently resetting.
+	value   = { header = "Cost",    sort = "price",     w = 78, optional = true,
+		hint = "What one costs you, by the cheaper of making it or buying it.\nMaking it is ten of this color's cheapest flower.\nHover a row for both numbers." },
 	-- Wide enough for a four-figure shortfall: a goal of 500 on a color you own 10 of
 	-- is an ordinary thing to set, and 48px clipped it.
 	-- Read-only: it is the sum of the shade goals set on the By Dye tab, plus any
@@ -269,6 +272,29 @@ local function ShowColorTooltip(row)
 		else
 			GameTooltip:AddLine(("Short %d dye (%d more flowers)"):format(rc.shortfall, rc.herbsShort),
 				0.95, 0.6, 0.3)
+		end
+	end
+
+	-- Make it or buy it. Both numbers, side by side, because the Cost column only has
+	-- room for the winner and the losing number is what tells you by how much.
+	local cmp = ns.GetCraftVsBuy(dye.key)
+	if cmp and cmp.best then
+		GameTooltip:AddLine(" ")
+		GameTooltip:AddDoubleLine("Make one",
+			cmp.craft and FormatMoney(cmp.craft) or "no flower priced",
+			0.8, 0.8, 0.8, unpack(cmp.cheaper == "craft" and { 0.5, 1, 0.5 } or { 0.8, 0.8, 0.8 }))
+		GameTooltip:AddDoubleLine("Buy one",
+			cmp.buy and FormatMoney(cmp.buy) or "not priced",
+			0.8, 0.8, 0.8, unpack(cmp.cheaper == "buy" and { 0.5, 0.85, 1 } or { 0.8, 0.8, 0.8 }))
+		if cmp.cheaper then
+			local saving = math.abs((cmp.craft or 0) - (cmp.buy or 0))
+			GameTooltip:AddLine(("%s saves %s each"):format(
+				cmp.cheaper == "buy" and "Buying" or "Making", FormatMoney(saving)),
+				0.7, 0.7, 0.7)
+		else
+			-- Only one side known. Say so rather than letting a lone number read as a
+			-- verdict -- scan again and it may well flip.
+			GameTooltip:AddLine("Scan to compare both", 0.6, 0.6, 0.6)
 		end
 	end
 
@@ -677,12 +703,25 @@ local function CellValue(key, dye, rc)
 		if n > 0 then return n, 0.5, 0.87, 0.5 end
 		return n, 0.45, 0.45, 0.45
 	elseif key == "value" then
-		-- What one costs to make — ten of the cheapest flower of its color. There's no
-		-- sale price to show any more (Warband-bound), and this is the number you
-		-- actually compare across colors now: which of these is cheap to make today.
-		local c = ns.GetCraftCost(dye.key)
-		local text = c and ("~%s/ea"):format(FormatMoney(c)) or "—"
-		return text, c and 1 or 0.4, c and 0.9 or 0.4, c and 0.4 or 0.4
+		-- What one costs you, by whichever route is cheaper, and which route that is.
+		-- The word matters more than the number here: the number alone can't say
+		-- whether you should be at a dye station or an auction house.
+		--
+		-- Only ONE of the two is usually known on a fresh scan, so the label says
+		-- which one it is rather than implying a comparison happened. "make" next to a
+		-- price with no dye price to weigh it against is honest; a green tick would
+		-- not be.
+		local cmp = ns.GetCraftVsBuy(dye.key)
+		if not cmp or not cmp.best then return "—", 0.4, 0.4, 0.4 end
+
+		local buying = (cmp.buy ~= nil and cmp.best == cmp.buy)
+		local text = ("%s %s"):format(FormatMoney(cmp.best), buying and "buy" or "make")
+		if cmp.cheaper == "buy" then
+			return text, 0.55, 0.8, 1.0    -- both known, buying wins
+		elseif cmp.cheaper == "craft" then
+			return text, 0.55, 0.9, 0.55   -- both known, making wins
+		end
+		return text, 0.85, 0.85, 0.85      -- only one number: no comparison to colour
 	end
 end
 

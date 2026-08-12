@@ -15,8 +15,8 @@ local ADDON, ns = ...
 -- scan has to ask Blizzard one throttled question per item and only works standing
 -- at an auction house — so it's the fallback, not the default.
 --
--- Only flowers, from any of the three: dyes are Warband-bound and can't be listed,
--- so there is no dye price for any source to know (see ns.DYES_TRADEABLE).
+-- Flowers and, since 12.1 put them back on the auction house, dyes: whatever
+-- ns.IsTradeable admits, from any of the three sources.
 --
 -- That ordering is also the fix for a real bug: Blizzard's auction API silently
 -- drops queries once you exceed its rate limit, which used to strand a scan partway
@@ -162,10 +162,11 @@ end
 --------------------------------------------------------------------------------
 
 -- Which items a price update covers. Same rules as the AH scan queue in Core:
--- flowers only. Warband-bound dyes have no market to have a price in, so TSM and
--- Auctionator have nothing to say about them either — asking would just spend the
--- pass filing `nil` against every dye. Hidden flowers aren't on screen, so they
--- aren't worth a lookup either.
+-- anything tradeable and not hidden. Since 12.1 that is flowers and dyes both, and
+-- TSM and Auctionator have something to say about each; while dyes were
+-- Warband-bound this skipped them, because asking would have spent the pass filing
+-- `nil` against every one. Hidden rows aren't on screen, so they aren't worth a
+-- lookup whatever their kind.
 function ns.ShouldPriceEntry(entry)
 	if not entry.id then return false end
 	if not ns.IsTradeable(entry) then return false end

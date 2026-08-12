@@ -23,15 +23,26 @@ local ADDON, ns = ...
 -- balance change stays a one-line edit.
 ns.HERBS_PER_DYE = ns.HERBS_PER_DYE or 10
 
--- Dyes went Warband-bound in the 4 Aug 2026 patch, ahead of 12.1: they can no
--- longer be traded or listed, so a dye has no buy price at all any more. Flowers
--- are unchanged and still sell normally.
+-- Dyes went Warband-bound in the 4 Aug 2026 patch, ahead of 12.1, and 12.1 gave it
+-- straight back: they list on the auction house again, one item per color, named
+-- "<Color> Housing Dye". So a dye has a buy price once more and the flag is true.
 --
 -- One flag rather than a dozen scattered `kind == "dye"` checks, because everything
 -- downstream has to agree with it: the scan queue, the price import, the Cost
--- column, and the station marks. If Blizzard ever reverses this, flipping it back
--- to true restores the old craft-vs-buy behaviour everywhere at once.
-ns.DYES_TRADEABLE = false
+-- column, and the station marks.
+--
+-- IT ONLY GOT HALF OF WHAT IT PROMISED, and that is worth knowing before trusting
+-- it again. The comment here used to say flipping it back "restores the old
+-- craft-vs-buy behaviour everywhere at once". It does not, because 1.3.0 did not
+-- merely gate that behaviour behind the flag — it REWROTE it. GetCraftBreakdown and
+-- GetHerbCraftVerdict were changed from craft-vs-buy to flower-vs-flower, and no
+-- flag brings those back; they had to be decided again on their own merits. What
+-- the flag genuinely covers is everything that asks "does this item have a price at
+-- all": the scan queue, the importer, GetValue, and the notices.
+--
+-- A flag is a switch over code that still exists. It cannot restore code that was
+-- deleted, and a comment promising otherwise made the change look free.
+ns.DYES_TRADEABLE = true
 
 -- Can this item be bought or sold at all? Takes an entry or an item key.
 function ns.IsTradeable(entry)
@@ -161,7 +172,9 @@ end
 --    one of them has to be rewritten to its color (see Migrate).
 -- 4: goals moved from the nine families onto the 77 shade names, so the old
 --    family goals become "unassigned" entries rather than being lost.
-local DB_VERSION = 4
+-- 5: 12.1 put dyes back on the auction house. No data changes; it arms the notice
+--    correcting what v2 told the player about scans pricing flowers only.
+local DB_VERSION = 5
 
 local defaults = {
 	version = DB_VERSION,
@@ -201,6 +214,12 @@ local defaults = {
 	-- the next login says so once and clears it. Default false, so a profile created
 	-- after the patch never announces a change it never lived through.
 	warbandNoticePending = false,
+	-- Set by the v5 migration on any profile that already existed when 12.1 put dyes
+	-- back on the auction house. The notice above told those players "scans price
+	-- flowers only from here", which is now wrong, and they have no reason to check.
+	-- Default false, so a profile created after 12.1 is never told about a rule it
+	-- never lived under.
+	dyePricingNoticePending = false,
 	ui = {
 		point = "CENTER",
 		relPoint = "CENTER",
@@ -446,6 +465,20 @@ local function Migrate(db)
 		-- Goals is a shade-keyed table from here on. Anything left in it was keyed by
 		-- a colour, which is now a different namespace entirely.
 		db.goals = {}
+	end
+
+	-- v4 -> v5: 12.1 put dyes back on the auction house. Nothing stored is WRONG this
+	-- time -- dye prices were cleared in v2 and nothing has written one since, so the
+	-- table is simply empty and the next scan fills it. The only debt is what the
+	-- player was told: the v2 notice said scans price flowers only from here, and
+	-- that is no longer true.
+	--
+	-- So this migration moves no data. It arms a correction, for exactly the profiles
+	-- that were around to hear the original claim. A profile created after 12.1 skips
+	-- every step including this one and is told nothing, which is right -- it never
+	-- lived under the rule being corrected.
+	if from < 5 then
+		db.dyePricingNoticePending = true
 	end
 
 	-- Keys that never shipped, cleared on every load rather than at a version gate.
@@ -963,12 +996,13 @@ end
 -- The AH scan that fills this in is a separate step; these are the pure readers
 -- and writers the cost display and the sort are built on.
 --
--- In practice this now only ever holds FLOWER prices: Warband-bound dyes aren't
--- traded, so nothing writes one and Migrate() cleared the pre-patch leftovers. The
--- store stays kind-agnostic rather than rejecting dyes outright — it's a dumb
--- key/value cache, and the rule about what's worth pricing belongs with the
--- scanner (BuildScanQueue) and the importer (ShouldPriceEntry), which is where a
--- reader can find it stated once.
+-- It holds flower AND dye prices again since 12.1 put dyes back on the auction
+-- house. It held flowers only for the month dyes were Warband-bound, and this store
+-- needed no change in either direction — it stayed kind-agnostic rather than
+-- rejecting dyes outright, so switching back was a matter of letting the scanner
+-- ask again. The rule about what is worth pricing lives with the scanner
+-- (BuildScanQueue) and the importer (ShouldPriceEntry), stated once, which is why
+-- neither reversal reached this far down.
 --------------------------------------------------------------------------------
 
 function ns.SetPrice(key, copper, source)
@@ -1013,8 +1047,8 @@ ns.Print = Print -- Prices.lua reports through the same prefix
 --------------------------------------------------------------------------------
 -- Auction House scanning
 --
--- Since dyes went Warband-bound, a scan prices FLOWERS and nothing else — they're
--- the only half of the recipe still on the auction house. See BuildScanQueue.
+-- A scan prices both halves of the recipe again: flowers, and since 12.1 the dyes
+-- themselves. See BuildScanQueue.
 --
 -- Value is the volume-weighted average unit price of the cheapest ~N units on the
 -- AH — what you'd realistically pay/get, not the single lowest listing (which can
@@ -1244,10 +1278,11 @@ function AdvanceScan()
 end
 
 -- The list of item IDs a scan will price, in order. Pure, so it's testable.
---   * FLOWERS only. Dyes are Warband-bound and can't be listed (ns.DYES_TRADEABLE),
---     so querying one is a guaranteed empty result — and on a rate-limited API,
---     spending half the run's queries on items that cannot have a price is worse
---     than useless: it's what pushes the flowers we DO need past the limiter.
+--   * Whatever ns.IsTradeable says, which since 12.1 is flowers AND dyes again.
+--     The rule is not "flowers only", it is "don't spend a query on something that
+--     cannot have a price": on a rate-limited API those queries are what push the
+--     items we DO need past the limiter. Between 4 Aug and 12.1 that meant skipping
+--     every dye; now it means skipping nothing but hidden rows.
 --     (Pigments used to be skipped here too, as an intermediate nobody trades to
 --     decide. 12.1 deleted them, so there's nothing left to skip.)
 --   * flowers the player has unchecked in the config are skipped too — if they
@@ -1432,11 +1467,17 @@ end
 -- how many you hold, how many dyes that makes, its craft cost, and whether it's the
 -- cheapest route into this color. Flowers are ordered cheapest-to-craft first.
 --
--- This used to be a craft-VS-BUY comparison. Warband-bound dyes killed the "buy"
--- half of it — there's no price to weigh crafting against, because crafting is the
--- only way to get one now. So the question the expand view answers changed from
--- "should I make this or buy it?" to "which flower should I make it out of?", which
--- is the one still worth asking. The comparison is now flower against flower.
+-- This was a craft-VS-BUY comparison until Warband-bound dyes killed the "buy"
+-- half, and it became flower against flower: not "should I make this or buy it?"
+-- but "which flower should I make it out of?".
+--
+-- 12.1 put the buy price back and this DELIBERATELY stayed as it is. The two
+-- questions are asked at different moments — whether to make a dye at all is a
+-- decision about the colour, and which flower to use only matters once that is
+-- settled — so craft-vs-buy went onto the colour row (ns.GetCraftVsBuy) rather than
+-- back in here. Merging them again would put two meanings on one mark: a red X that
+-- means either "there is a cheaper flower" or "don't make this at all" tells you
+-- neither, which is what it used to do.
 function ns.GetCraftBreakdown(dyeKey)
 	local dye = ns.byKey[dyeKey]
 	if not dye or dye.kind ~= "dye" then return nil end
@@ -1557,16 +1598,56 @@ function ns.GetCraftCost(dyeKey)
 	return cheapest and cheapest * perDye or nil
 end
 
+-- Make one, or buy one? Returns both numbers and which wins.
+--
+-- 12.1 put dyes back on the auction house, so this question exists again. It is
+-- deliberately answered HERE, at the color, and nowhere further down: the expand
+-- view and the reagent picker go on comparing flower against flower, because once
+-- you have decided to make a dye, which flower to make it from is a different
+-- question and still the one the game itself won't answer.
+--
+-- That split is why 1.3.0's craft-vs-buy code was not simply switched back on. It
+-- used to live in the flower comparison, which meant a red X on a flower could mean
+-- either "there's a cheaper flower" or "don't make this at all" — two answers on one
+-- mark. Two questions, two places.
+--
+--   craft    ten of the color's cheapest flower, nil if no flower is priced
+--   buy      what the dye itself goes for, nil if unpriced or untradeable
+--   best     the lower of whichever are known
+--   cheaper  "buy" or "craft", set ONLY when both are known. One number is not a
+--            comparison, and calling it one would put a verdict on screen that
+--            nothing was weighed for.
+function ns.GetCraftVsBuy(dyeKey)
+	local dye = ns.byKey[dyeKey]
+	if not dye or dye.kind ~= "dye" then return nil end
+
+	local craft = ns.GetCraftCost(dyeKey)
+	local buy = ns.IsTradeable(dye) and ns.GetPrice(dyeKey) or nil
+
+	local best, cheaper
+	if craft and buy then
+		if buy < craft then best, cheaper = buy, "buy" else best, cheaper = craft, "craft" end
+	else
+		best = craft or buy
+	end
+
+	return { craft = craft, buy = buy, best = best, cheaper = cheaper }
+end
+
 -- Is THIS flower the one to take to the station for `color`?
 -- Returns true (cheapest route into the color — use this), false (a dearer flower
 -- would do the same job for less), or nil (nothing of this color is priced yet, so
 -- there's no honest answer and the picker shows no mark at all).
 --
 -- The comparison used to be against the dearest dye of the color — the most the
--- pigment could become. Warband-bound dyes have no price to be dearest, so the
--- check is now flower against flower: of everything that makes this color, which
--- costs least? A red X no longer means "don't bother", it means "there's a cheaper
--- flower in this list".
+-- pigment could become. It is flower against flower now: of everything that makes
+-- this color, which costs least? A red X does not mean "don't bother", it means
+-- "there's a cheaper flower in this list".
+--
+-- Kept that way after 12.1 restored dye prices. You are standing at the station
+-- with the picker open; whether to make one at all was decided before you walked
+-- over, and that comparison lives on the colour row (ns.GetCraftVsBuy). This mark
+-- answers the one thing the station itself won't.
 function ns.GetHerbCraftVerdict(herbKey, color)
 	local herbPrice = ns.GetPrice(herbKey)
 	if not herbPrice then return nil end
@@ -1639,9 +1720,12 @@ end
 -- caller's list is untouched. Name is always the tiebreaker, ascending.
 --   "alpha" — by name
 --   "owned" — by account-wide count
---   "price" — by what the dye costs to CRAFT (its cheapest flower × 10); dyes with
---             no priced flower always sort last, either direction. The mode keeps
---             its old name so saved sort preferences survive the change of meaning.
+--   "price" — by what the dye costs YOU, the cheaper of making it and buying it,
+--             which is exactly the number the Cost column shows. Sorting on the
+--             craft cost while the column displayed a buy price would put the rows
+--             in an order the screen contradicts. Dyes with neither number known
+--             always sort last, either direction. The mode keeps its old name so
+--             saved sort preferences survive the changes of meaning.
 -- When `dir` is omitted, each mode's natural default is used (A–Z, most-owned,
 -- highest-price), which is what keeps two-argument callers working.
 -- Sortable columns and each one's natural default direction.
@@ -1653,7 +1737,7 @@ local DEFAULT_DIR = {
 	alpha    = "asc",   -- A–Z
 	owned    = "desc",  -- most owned first
 	goal     = "desc",  -- biggest goals first
-	price    = "asc",   -- cheapest to craft first (it's a cost now, not a value)
+	price    = "asc",   -- cheapest to get hold of first, made or bought
 	craft    = "desc",  -- most makeable first
 	craftherb = "desc", -- most flowers held first
 	short    = "desc",  -- most work outstanding first
@@ -1670,7 +1754,11 @@ local DEFAULT_DIR = {
 local function MetricPair(mode, key)
 	if mode == "owned" then return ns.GetTotal(key) end
 	if mode == "goal"  then return ns.GetGoal(key) end
-	if mode == "price" then return ns.GetCraftCost(key) end      -- may be nil
+	-- The cheaper of make-or-buy, matching what the Cost column shows. May be nil.
+	if mode == "price" then
+		local cmp = ns.GetCraftVsBuy(key)
+		return cmp and cmp.best or nil
+	end
 	if mode == "short" then
 		local rc = ns.GetRecipeStatus(key)
 		return rc and rc.shortfall or 0
@@ -2040,12 +2128,36 @@ end
 -- the flag set (see Migrate): there's nothing to explain to someone who never saw a
 -- dye price in the first place.
 local function AnnounceWarbandDyes()
-	if ns.DYES_TRADEABLE then return end
+	if ns.DYES_TRADEABLE then
+		-- Untradeable no longer, so the notice is moot. Clear the flag rather than
+		-- leaving it armed: a profile that never got told is not owed the telling
+		-- later, and an armed flag would fire this about a patch two versions old if
+		-- Blizzard ever bound dyes again.
+		DyeingDownTheHouseDB.warbandNoticePending = false
+		return
+	end
 	if not DyeingDownTheHouseDB.warbandNoticePending then return end
 	DyeingDownTheHouseDB.warbandNoticePending = false
 
 	Print("heads up, housing dyes are |cffffd100Warband-bound|r now, in preparation for patch 12.1.")
 	Print("scans price flowers only from here; this addon will stay updated as things change!")
+end
+
+-- And the same in reverse, because the notice above told people something that is
+-- no longer true.
+--
+-- Anyone who read it was told "scans price flowers only from here". 12.1 put dyes
+-- back on the auction house, so that instruction is now wrong and the person acting
+-- on it has no reason to look again. A correction is owed to exactly the profiles
+-- that existed to hear the original — which is what the v5 migration marks, the
+-- same way v2 marked the first one.
+local function AnnounceDyesTradeableAgain()
+	if not ns.DYES_TRADEABLE then return end
+	if not DyeingDownTheHouseDB.dyePricingNoticePending then return end
+	DyeingDownTheHouseDB.dyePricingNoticePending = false
+
+	Print("housing dyes are back on the auction house in 12.1, one per color.")
+	Print("scans price them again, and the Cost column now says whether making one is cheaper than buying it.")
 end
 
 local refreshPending = false
@@ -2153,6 +2265,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		ns.Refresh()
 		if DyeingDownTheHouseDB.ui.shown then ns.Show() end
 		AnnounceWarbandDyes()
+		AnnounceDyesTradeableAgain()
 
 	elseif event == "BANKFRAME_OPENED" then
 		bankOpen = true
@@ -2275,7 +2388,7 @@ SlashCmdList.DYEINGDOWNTHEHOUSE = function(msg)
 		Print("commands:")
 		print("  /dye — toggle the window")
 		print("  /dye search <text> — filter by color or by a shade name like \"obsidium\" (blank clears)")
-		print("  /dye sort <alpha | price | owned> — change the order (price = cost to make)")
+		print("  /dye sort <alpha | price | owned> — change the order (price = what one costs you, made or bought)")
 		print("  /dye scan — price the flowers from your chosen price source")
 		print("  /dye source [auto|tsm|auctionator|blizzard] — where prices come from")
 		print("  /dye tab <color | dye> — switch between the totals and the color names")
