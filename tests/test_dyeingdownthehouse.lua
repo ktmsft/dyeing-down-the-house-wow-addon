@@ -178,7 +178,8 @@ end
 --------------------------------------------------------------------------------
 
 local ahSent = {}       -- every query actually sent, in order
-local ahListings = {}   -- [itemID] = { { unitPrice =, quantity = }, ... }
+local ahListings = {}   -- [itemID] = { { unitPrice =, quantity = }, ... }   commodities
+local ahAuctions = {}   -- [itemID] = { { buyoutAmount =, quantity = }, ... } everything else
 local ahThrottled = false
 
 C_AuctionHouse = {
@@ -190,6 +191,15 @@ C_AuctionHouse = {
 	IsThrottledMessageSystemReady = function() return not ahThrottled end,
 	GetNumCommoditySearchResults = function(itemID) return #(ahListings[itemID] or {}) end,
 	GetCommoditySearchResultInfo = function(itemID, i) return (ahListings[itemID] or {})[i] end,
+	-- The non-commodity half. Note these take an item KEY where the commodity pair
+	-- take an item ID -- the asymmetry is Blizzard's, and getting it wrong is why the
+	-- reply-matching check has to reach inside the key.
+	GetNumItemSearchResults = function(itemKey)
+		return #(ahAuctions[itemKey and itemKey.itemID] or {})
+	end,
+	GetItemSearchResultInfo = function(itemKey, i)
+		return (ahAuctions[itemKey and itemKey.itemID] or {})[i]
+	end,
 }
 
 SlashCmdList = {}
@@ -1351,6 +1361,89 @@ Fire("COMMODITY_SEARCH_RESULTS_UPDATED", 900101)
 check("the right reply is accepted", ns.GetPrice("rose"), 5000)
 DriveScan({})
 check("the scan then ends", ns.IsScanning(), false)
+
+--------------------------------------------------------------------------------
+-- Non-commodity auctions
+--
+-- A commodity is a stackable trade good sold by the unit; everything else is sold
+-- as individual auctions and read through a different pair of calls. The scanner
+-- used to treat a non-commodity reply as "skip it and move on", which was fine
+-- while the queue held only flowers -- every flower is a commodity.
+--
+-- 12.1 put dyes back in the queue. If a housing dye is not a commodity, that skip
+-- is EVERY dye, silently: the scan reports success, the Cost column goes on saying
+-- "make", and nothing says why. Whether dyes are commodities has not been read from
+-- the game and does not need to be, as long as both paths work.
+--------------------------------------------------------------------------------
+
+print("\n-- A non-commodity item is priced, not skipped --")
+
+ahSent = {}
+DyeingDownTheHouseDB.prices = {}
+-- Quantities are over PRICE_MIN_DEPTH (200) on purpose. Depth applies to these
+-- exactly as it does to commodities: the cheap stack has to have real volume behind
+-- it or the market counts as thin and the dearest listing wins. A four-unit stack
+-- would have proved the division and hidden that.
+ahAuctions[900001] = {
+	-- Sold as stacks with a buyout, so the unit price is buyout / quantity.
+	{ buyoutAmount = 750000, quantity = 250 },  -- 3000 each, deep enough to count
+	{ buyoutAmount = 10000,  quantity = 2 },    -- 5000 each
+	-- Bid-only: no buyout, so not a price anyone can pay right now. If this were
+	-- averaged in it would report a market cheaper than anything purchasable.
+	{ bidAmount = 100, quantity = 5000 },
+}
+ns.StartAHScan({ { key = "red", id = 900001, kind = "dye" } })
+RunTimers()
+Fire("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 900001 })
+check("a non-commodity item gets a price", ns.GetPrice("red") ~= nil, true)
+check("...from buyout divided by stack size", ns.GetPrice("red"), 3000)
+DriveScan({})
+check("and the scan completes", ns.IsScanning(), false)
+
+print("\n-- ...and a thin one falls back the same way commodities do --")
+
+ahSent = {}
+DyeingDownTheHouseDB.prices = {}
+ahAuctions[900001] = {
+	{ buyoutAmount = 12000, quantity = 4 },   -- 3000 each, but only 4 of them
+	{ buyoutAmount = 10000, quantity = 2 },   -- 5000 each
+}
+ns.StartAHScan({ { key = "red", id = 900001, kind = "dye" } })
+RunTimers()
+Fire("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 900001 })
+check("too little depth -> the dearest listing, not the cheapest", ns.GetPrice("red"), 5000)
+DriveScan({})
+
+print("\n-- ...and its reply is matched like any other --")
+
+ahSent = {}
+DyeingDownTheHouseDB.prices = {}
+ahAuctions[900001] = { { buyoutAmount = 750000, quantity = 250 } } -- 3000 each
+ns.StartAHScan({ { key = "red", id = 900001, kind = "dye" } })
+RunTimers()
+-- arg1 is an item KEY here, not an ID. A reply for a different item must not be
+-- filed against the query in flight.
+Fire("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 900102 })
+check("a mismatched item-key reply stores nothing", ns.GetPrice("red"), nil)
+check("...and does not advance the scan", ns.IsScanning(), true)
+Fire("ITEM_SEARCH_RESULTS_UPDATED", { itemID = 900001 })
+check("the right one is accepted", ns.GetPrice("red"), 3000)
+DriveScan({})
+ahAuctions[900001] = nil
+
+print("\n-- A commodity still wins when both could answer --")
+
+ahSent = {}
+DyeingDownTheHouseDB.prices = {}
+ahListings[900001] = { { unitPrice = 777, quantity = 100 } }
+ahAuctions[900001] = { { buyoutAmount = 99999, quantity = 1 } }
+ns.StartAHScan({ { key = "red", id = 900001, kind = "dye" } })
+RunTimers()
+Fire("COMMODITY_SEARCH_RESULTS_UPDATED", 900001)
+check("the commodity listing is used", ns.GetPrice("red"), 777)
+DriveScan({})
+ahListings[900001] = nil
+ahAuctions[900001] = nil
 
 print("\n-- Throttling delays the scan, it does not break it --")
 

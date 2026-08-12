@@ -1150,10 +1150,63 @@ local function ReadCommodityListings(itemID)
 	return listings
 end
 
+-- The other kind of auction.
+--
+-- A commodity is a stackable trade good sold by the unit, and the whole listing set
+-- comes back in one reply. Everything else is sold as individual auctions with
+-- their own buyout, read through a different pair of calls that take an ITEM KEY
+-- rather than an item ID.
+--
+-- This exists because the scan queue stopped being flowers-only. Every flower is a
+-- commodity, so while that was all we asked about, a non-commodity reply meant
+-- something had gone strangely wrong and skipping it was reasonable. 12.1 put dyes
+-- back in the queue, and if a housing dye is NOT a commodity then that skip is
+-- every dye, silently: the scan reports success, the Cost column keeps saying
+-- "make", and nothing anywhere says why.
+--
+-- Which kind a dye is has not been read from the game, and does not need to be —
+-- both paths are handled, the commodity one first, and whichever answers wins.
+-- Cheaper than being right about it.
+local function ReadItemListings(itemID)
+	local listings = {}
+	if type(C_AuctionHouse.GetNumItemSearchResults) ~= "function"
+		or type(C_AuctionHouse.GetItemSearchResultInfo) ~= "function"
+		or type(C_AuctionHouse.MakeItemKey) ~= "function" then
+		return listings
+	end
+
+	local ok, itemKey = pcall(C_AuctionHouse.MakeItemKey, itemID)
+	if not ok or itemKey == nil then return listings end
+
+	local gotCount, n = pcall(C_AuctionHouse.GetNumItemSearchResults, itemKey)
+	n = (gotCount and tonumber(n)) or 0
+	for i = 1, n do
+		local got, r = pcall(C_AuctionHouse.GetItemSearchResultInfo, itemKey, i)
+		if got and type(r) == "table" then
+			local quantity = tonumber(r.quantity) or 1
+			local buyout = tonumber(r.buyoutAmount)
+			-- Bid-only auctions carry no buyout. A bid is not a price you can pay
+			-- right now, so it is not a price, and averaging one in would report a
+			-- market cheaper than anything actually purchasable.
+			if buyout and buyout > 0 and quantity > 0 then
+				listings[#listings + 1] = {
+					unitPrice = math.floor(buyout / quantity),
+					quantity = quantity,
+				}
+			end
+		end
+	end
+	return listings
+end
+
 local function StoreScannedPrice(itemID)
 	local entry = ns.byID[itemID]
 	if not entry then return end
-	local avg = ns.ComputeMarketPrice(ReadCommodityListings(itemID))
+
+	local listings = ReadCommodityListings(itemID)
+	if #listings == 0 then listings = ReadItemListings(itemID) end
+
+	local avg = ns.ComputeMarketPrice(listings)
 	if avg then ns.SetPrice(entry.key, avg, "ah") end
 	-- No auctions at all -> leave any previous price alone rather than wipe it.
 end
@@ -1367,8 +1420,19 @@ scanFrame:SetScript("OnEvent", function(_, event, arg1)
 			AdvanceScan()
 		end
 	elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
-		-- One of our items turned out non-commodity: skip pricing, keep going.
-		if scan.active then AdvanceScan() end
+		-- A non-commodity reply, which now gets PRICED rather than skipped. This used
+		-- to advance without storing anything, on the reasoning that the queue held
+		-- only flowers and every flower is a commodity — true until 12.1 put dyes back
+		-- in it.
+		--
+		-- arg1 is an item KEY here, not an item ID like the commodity event sends, so
+		-- the same-item check has to reach inside it. Comparing the table itself would
+		-- never match and every reply would look like a late one.
+		local replyID = (type(arg1) == "table") and tonumber(arg1.itemID) or tonumber(arg1)
+		if scan.active and scan.itemID and (replyID == nil or replyID == scan.itemID) then
+			StoreScannedPrice(scan.itemID)
+			AdvanceScan()
+		end
 	elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then
 		if scan.active and scan.awaitingNext then TryDispatch() end
 	end
