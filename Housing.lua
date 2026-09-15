@@ -534,12 +534,16 @@ local function UpdatePanel()
 		-- "25 flowers make 2 m..." truncated is worse than saying less. Both numbers
 		-- survive because both are the point -- what you hold, and what the flowers
 		-- you already have would turn into.
-		local rc = ns.GetRecipeStatus and ns.GetRecipeStatus(entry.color)
+		--
+		-- The plain counts, not the recipe status: this runs five times a second while
+		-- the panel is up, and the status builds a table per flower to say the same.
 		local have = ns.GetTotal and ns.GetTotal(entry.color) or 0
 		local detail = ("have %d"):format(have)
-		if rc then
-			if rc.ownedHerbs > 0 then
-				detail = ("%s  ·  %d flowers make %d"):format(detail, rc.ownedHerbs, rc.craftableNow)
+		local dye = ns.byKey and ns.byKey[entry.color]
+		if dye and dye.kind == "dye" and ns.GetColorCounts then
+			local _, ownedHerbs, craftable = ns.GetColorCounts(entry.color)
+			if ownedHerbs > 0 then
+				detail = ("%s  ·  %d flowers make %d"):format(detail, ownedHerbs, craftable)
 			else
 				detail = detail .. "  ·  no flowers"
 			end

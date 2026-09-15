@@ -602,12 +602,80 @@ function ns.LearnHerbsFromStation()
 	return true, stats
 end
 
+-- Is the open trade skill window the Dye Station?
+--
+-- Every profession window fires the same events, and reading one means a schematic
+-- per recipe. At the station that is nine. At an alchemist's own window it is every
+-- recipe they have ever seen, and it used to happen up to eight times a visit,
+-- because a window with no dyes in it never counts as read.
+--
+-- So it is checked first, two ways, and a read is skipped only when BOTH say no:
+--   * the window's profession ID against the station's skill line, and
+--   * the window's recipe IDs against the station's nine.
+-- A station that reports some other profession ID is still read as long as one of
+-- its recipes matches, and a client that won't say which profession is open is read
+-- exactly as before. Being wrong in the skipping direction would silently stop the
+-- herb map being learned, which is the expensive mistake here; an extra read is not.
+--
+-- Both are Blizzard's numbers, read off the 12.1 station's recipe categories
+-- (reference/12.1-verification.md, section 4). UPDATE THEM if a patch moves the
+-- station to a new skill line or replaces its recipes.
+local STATION_SKILL_LINE = 2984 -- "Dye Crafting"
+local STATION_RECIPES = {
+	[1306642] = true, [1306629] = true, [1306796] = true, -- black, purple, blue
+	[1306797] = true, [1306799] = true, [1306801] = true, -- brown, green, orange
+	[1306802] = true, [1306803] = true, [1306804] = true, -- red, white, yellow
+}
+
+-- The profession IDs the open window reports, child and base, as one string so a
+-- verdict can be remembered against it. nil when neither can be read.
+local function OpenProfessionIDs()
+	if type(C_TradeSkillUI) ~= "table" then return nil end
+	local child, base
+	for _, name in ipairs({ "GetChildProfessionInfo", "GetBaseProfessionInfo" }) do
+		local fn = C_TradeSkillUI[name]
+		if type(fn) == "function" then
+			local ok, info = pcall(fn)
+			local id = ok and type(info) == "table" and tonumber(info.professionID) or nil
+			if id and id > 0 then
+				if name == "GetChildProfessionInfo" then child = id else base = id end
+			end
+		end
+	end
+	if not (child or base) then return nil end
+	return child, base
+end
+
+-- The profession last found not to be the station, so the recipe list is not
+-- walked again on every list update while that same window stays open.
+local ruledOut
+
+function ns.LooksLikeStation()
+	local child, base = OpenProfessionIDs()
+	if child == STATION_SKILL_LINE or base == STATION_SKILL_LINE then return true end
+	if not (child or base) then return true end -- can't tell: read as before
+
+	local signature = tostring(child) .. ":" .. tostring(base)
+	if ruledOut == signature then return false end
+
+	local ok, ids = pcall(C_TradeSkillUI.GetAllRecipeIDs)
+	-- No list to judge by yet. Let the read decide; with nothing in it, it is cheap.
+	if not ok or type(ids) ~= "table" or next(ids) == nil then return true end
+	for _, recipeID in pairs(ids) do
+		if STATION_RECIPES[recipeID] then return true end
+	end
+	ruledOut = signature
+	return false
+end
+
 -- Called by Crafting.lua the moment the station's recipe list lays itself out, and
 -- by the events below. Bounded per visit: the window updates its list constantly
 -- while you scroll and filter, and re-reading nine schematics on each of those
 -- would be work for nothing.
 function ns.TryLearnHerbs()
 	if stationRead or stationTries >= MAX_STATION_TRIES then return end
+	-- Not the station: costs nothing and spends no try.
+	if not ns.LooksLikeStation() then return end
 	stationTries = stationTries + 1
 	local ok = ns.LearnHerbsFromStation()
 	if ok then
@@ -706,8 +774,11 @@ pcall(station.RegisterEvent, station, "TRADE_SKILL_CLOSE")
 
 station:SetScript("OnEvent", function(_, event)
 	if event == "TRADE_SKILL_CLOSE" then
-		stationRead, stationTries = false, 0
+		stationRead, stationTries, ruledOut = false, 0, nil
 	elseif STATION_EVENTS[event] then
+		-- A new data source is a new recipe list, so judge it afresh rather than on
+		-- whatever was open a moment ago.
+		if event == "TRADE_SKILL_DATA_SOURCE_CHANGED" then ruledOut = nil end
 		pcall(ns.TryLearnHerbs)
 	end
 end)

@@ -1167,6 +1167,12 @@ local scan = {
 	tries = 0,  -- attempts spent on the current item
 	waits = 0,  -- consecutive throttle polls on the current item
 	failed = 0, -- items given up on during this run
+	-- Which wait a dispatch timer belongs to. Bumped whenever the scan moves on or
+	-- stops, so a timer left over from an earlier item or an earlier scan does
+	-- nothing when it lands.
+	step = 0,
+	pacing = false,  -- inside the floor between queries; nothing may send yet
+	polling = false, -- a throttle poll is already on its way
 }
 local ahOpen = false
 
@@ -1272,6 +1278,7 @@ end
 
 local function FinishScan()
 	InvalidateInFlight()
+	scan.step = scan.step + 1
 	scan.active = false
 	scan.itemID = nil
 	scan.awaitingNext = false
@@ -1336,8 +1343,15 @@ end
 -- Send the current item's query as soon as the throttle allows. Blizzard usually
 -- wakes us with AUCTION_HOUSE_THROTTLED_SYSTEM_READY, but that event is not
 -- guaranteed to arrive, so this also polls itself as a backstop.
+--
+-- ONE chain at a time. The wake-up event used to call straight in here as well as
+-- the timers, so an event that landed while still throttled started a second poll
+-- chain beside the first -- twice the polling, and the wait budget spent at double
+-- speed -- and one that landed in the gap between queries sent early, skipping the
+-- pacing floor. The event now only counts once the floor has passed, and a poll is
+-- only scheduled when none is already pending.
 function TryDispatch()
-	if not (scan.active and scan.awaitingNext) then return end
+	if not (scan.active and scan.awaitingNext) or scan.pacing then return end
 
 	local ready = true
 	if type(C_AuctionHouse.IsThrottledMessageSystemReady) == "function" then
@@ -1351,6 +1365,8 @@ function TryDispatch()
 		return
 	end
 
+	if scan.polling then return end
+
 	scan.waits = scan.waits + 1
 	if scan.waits > ns.SCAN_MAX_WAIT then
 		-- Throttled for ~20s with no let-up. Skip rather than hang forever.
@@ -1359,7 +1375,13 @@ function TryDispatch()
 		AdvanceScan()
 		return
 	end
-	C_Timer.After(0.5, TryDispatch)
+	scan.polling = true
+	local step = scan.step
+	C_Timer.After(0.5, function()
+		if scan.step ~= step then return end
+		scan.polling = false
+		TryDispatch()
+	end)
 end
 
 function AdvanceScan()
@@ -1371,7 +1393,15 @@ function AdvanceScan()
 
 	scan.awaitingNext = true
 	scan.waits = 0
-	C_Timer.After(ns.SCAN_INTERVAL, TryDispatch)
+	scan.step = scan.step + 1
+	scan.polling = false
+	scan.pacing = true
+	local step = scan.step
+	C_Timer.After(ns.SCAN_INTERVAL, function()
+		if scan.step ~= step then return end
+		scan.pacing = false
+		TryDispatch()
+	end)
 	ns.Refresh()
 end
 
@@ -1432,6 +1462,7 @@ ns.StartScan = ns.StartAHScan
 
 function ns.StopScan()
 	InvalidateInFlight()
+	scan.step = scan.step + 1
 	scan.active = false
 	scan.itemID = nil
 	scan.awaitingNext = false
@@ -1531,6 +1562,26 @@ function ns.GetColorSupply(color)
 		makeableDyes = ownedDyes + dyesFromHerbs,  -- held + makeable
 		herbs = breakdown,
 	}
+end
+
+-- The three numbers a list row actually draws, with no tables: dyes held, flowers
+-- held, and dyes those flowers make right now. The same sums as GetColorSupply.
+--
+-- Split out because the window, the sort and the housing panel only ever wanted
+-- these, and GetRecipeStatus builds a table per flower to hand them over -- once
+-- per row per refresh, and five times a second while the housing panel is up. The
+-- tooltip, which does use the per-flower detail, still asks for the full status.
+function ns.GetColorCounts(color)
+	local dye = ns.byKey[color]
+	local ownedDyes = (dye and dye.kind == "dye") and ns.GetTotal(dye.key) or 0
+	local perDye = ns.HERBS_PER_DYE
+	local ownedHerbs, dyesFromHerbs = 0, 0
+	for _, herb in ipairs(ns.herbsByColor[color] or {}) do
+		local have = ns.GetTotal(herb.key)
+		ownedHerbs = ownedHerbs + have
+		dyesFromHerbs = dyesFromHerbs + math.floor(have / perDye)
+	end
+	return ownedDyes, ownedHerbs, dyesFromHerbs
 end
 
 -- Status for one color against its goal. Treats this color's herbs in isolation
@@ -1868,15 +1919,19 @@ local function MetricPair(mode, key)
 		local cmp = ns.GetCraftVsBuy(key)
 		return cmp and cmp.best or nil
 	end
+	-- The counts rather than the full recipe status, which would build a table per
+	-- flower just to read two numbers back out.
+	local dye = ns.byKey[key]
+	local isDye = dye and dye.kind == "dye"
 	if mode == "short" then
-		local rc = ns.GetRecipeStatus(key)
-		return rc and rc.shortfall or 0
+		if not isDye then return 0 end
+		return math.max(0, ns.GetGoal(key) - ns.GetTotal(key))
 	end
 	if mode == "craft" or mode == "craftherb" then
-		local rc = ns.GetRecipeStatus(key)
-		if not rc then return 0, 0 end
-		if mode == "craftherb" then return rc.ownedHerbs, rc.craftableNow end
-		return rc.craftableNow, rc.ownedHerbs
+		if not isDye then return 0, 0 end
+		local _, ownedHerbs, craftable = ns.GetColorCounts(dye.color)
+		if mode == "craftherb" then return ownedHerbs, craftable end
+		return craftable, ownedHerbs
 	end
 	return 0
 end
@@ -2394,7 +2449,8 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		bagGroups = BuildBagGroups()
 
 	elseif event == "PLAYER_LOGIN" then
-		ns.BuildUI()
+		-- The window is no longer built here. ns.Show builds it the first time it is
+		-- opened, so a player who keeps it closed never pays for forty rows of it.
 		-- After our own scan, so characters we can see for ourselves always win.
 		ScanBags()
 		RefreshBorrowed()

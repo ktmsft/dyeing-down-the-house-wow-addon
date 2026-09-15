@@ -155,18 +155,63 @@ function GetRealmName() return "Enterprise" end
 -- last handler meant the scanner's events were unreachable, so its whole state
 -- machine went untested. Dispatch to all of them, like the client does.
 local handlers = {}
-function CreateFrame()
-	return {
-		RegisterEvent = function() end,
-		UnregisterEvent = function() end,
-		SetScript = function(self, script, fn)
-			if script == "OnEvent" then handlers[#handlers + 1] = fn end
-			-- Kept on the frame too, so a test can see whether an OnUpdate is still
-			-- set and drive a frame's handlers without firing at every other frame.
-			self[script] = fn
-		end,
-	}
+
+-- A widget that answers every method the addon's frames call. Enough of one to load
+-- the UI and options files and count what they build; nothing here renders.
+--
+-- Methods are a fixed table, not a catch-all: a catch-all would also answer
+-- `frame.OnUpdate` with a function, and the idle-cost tests read exactly that field
+-- to see whether a script is still set.
+local widgetsMade = 0
+local Widget
+local WIDGET = {}
+local function noop() end
+for _, name in ipairs({
+	"RegisterEvent", "UnregisterEvent", "SetPoint", "ClearAllPoints", "SetAllPoints",
+	"SetAlpha", "SetScale", "SetBackdrop", "SetBackdropColor", "SetClampedToScreen",
+	"SetMovable", "SetResizable", "SetResizeBounds", "EnableMouse", "RegisterForDrag",
+	"RegisterForClicks", "StartMoving", "StartSizing", "StopMovingOrSizing",
+	"SetTexture", "SetColorTexture", "SetTexCoord", "SetVertexColor", "SetFont",
+	"SetTextColor", "SetJustifyH", "SetWordWrap", "SetNormalTexture",
+	"SetHighlightTexture", "SetAutoFocus", "SetNumeric", "SetMaxLetters", "ClearFocus",
+	"SetScrollChild", "SetMinMaxValues", "SetValueStep", "SetObeyStepOnDrag",
+	"SetOrientation", "SetValue", "SetChecked", "SetEnabled", "Enable", "Disable",
+	"SetOwner", "AddLine", "AddDoubleLine", "HookScript", "SetFrameLevel",
+}) do WIDGET[name] = noop end
+function WIDGET:SetScript(script, fn)
+	if script == "OnEvent" then handlers[#handlers + 1] = fn end
+	-- Kept on the frame too, so a test can see whether an OnUpdate is still set and
+	-- drive a frame's handlers without firing at every other frame.
+	self[script] = fn
 end
+function WIDGET:Show() self.shown = true end
+function WIDGET:Hide() self.shown = false end
+function WIDGET:SetShown(v) self.shown = v and true or false end
+function WIDGET:IsShown() return self.shown ~= false end
+function WIDGET:IsVisible() return self.shown ~= false end
+function WIDGET:SetWidth(w) self.width = w end
+function WIDGET:SetHeight(h) self.height = h end
+function WIDGET:SetSize(w, h) self.width, self.height = w, h end
+function WIDGET:GetWidth() return self.width or 400 end
+function WIDGET:GetHeight() return self.height or 400 end
+function WIDGET:GetPoint() return "CENTER", nil, "CENTER", 0, 0 end
+function WIDGET:GetFrameLevel() return 1 end
+function WIDGET:SetText(t) self.text = t end
+function WIDGET:GetText() return self.text or "" end
+function WIDGET:GetNumber() return tonumber(self.text) or 0 end
+function WIDGET:GetStringWidth() return 40 end
+function WIDGET:HasFocus() return false end
+function WIDGET:GetChecked() return false end
+function WIDGET:IsOwned() return false end
+function WIDGET:CreateTexture() return Widget() end
+function WIDGET:CreateFontString() return Widget() end
+
+function Widget()
+	widgetsMade = widgetsMade + 1
+	return setmetatable({}, { __index = WIDGET })
+end
+
+function CreateFrame() return Widget() end
 local function Fire(event, arg1)
 	for _, fn in ipairs(handlers) do fn(nil, event, arg1) end
 end
@@ -1526,6 +1571,44 @@ Fire("COMMODITY_SEARCH_RESULTS_UPDATED", 900101)
 DriveScan({})
 check("and the scan completes", ns.IsScanning(), false)
 
+print("\n-- The wake-up event cannot jump the gap between queries --")
+-- The ready event can land right after a reply, inside the pacing floor. It used to
+-- send there and then, and the floor only ever applied when the event was late.
+ahSent = {}
+ns.StartAHScan({ { key = "rose", id = 900101, kind = "herb" } })
+Fire("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+check("nothing goes out before the interval", #ahSent, 0)
+RunTimers()
+check("...and it goes out once the interval has passed", #ahSent, 1)
+Fire("COMMODITY_SEARCH_RESULTS_UPDATED", 900101)
+DriveScan({})
+
+print("\n-- Only one throttle poll is ever waiting --")
+-- An event that arrives while still throttled used to start a poll chain of its own
+-- beside the one already running: five of them meant six polls every half second.
+do
+	ahSent = {}
+	ahThrottled = true
+	local realReady = C_AuctionHouse.IsThrottledMessageSystemReady
+	local asks = 0
+	C_AuctionHouse.IsThrottledMessageSystemReady = function() asks = asks + 1; return not ahThrottled end
+	ns.StartAHScan({ { key = "rose", id = 900101, kind = "herb" } })
+	RunTimers() -- the interval passes, the throttle says no, one poll is scheduled
+	for _ = 1, 5 do Fire("AUCTION_HOUSE_THROTTLED_SYSTEM_READY") end
+	asks = 0
+	RunTimers()
+	check("one poll ran, not six", asks, 1)
+	check("and the scan is still waiting, not skipping", ns.IsScanning(), true)
+
+	ahThrottled = false
+	C_AuctionHouse.IsThrottledMessageSystemReady = realReady
+	RunTimers()
+	check("it sends once the throttle clears", #ahSent, 1)
+	Fire("COMMODITY_SEARCH_RESULTS_UPDATED", 900101)
+	DriveScan({})
+	check("and completes", ns.IsScanning(), false)
+end
+
 print("\n-- Closing the auction house abandons the scan cleanly --")
 
 ahSent = {}
@@ -2235,6 +2318,263 @@ do
 
 	ProfessionsFrame = nil
 	hooksecurefunc = realHook
+end
+
+print("\n-- Only the Dye Station's window gets its recipes read --")
+-- Every profession window fires the same events. An alchemist's own window used to
+-- have every schematic read, up to eight times a visit.
+do
+	local schematics = 0
+	local profession = { professionID = 171 } -- Alchemy
+	local recipeIDs = { 9001, 9002, 9003 }
+	C_TradeSkillUI = {
+		GetChildProfessionInfo = function() return profession end,
+		GetBaseProfessionInfo = function() return profession end,
+		GetAllRecipeIDs = function() return recipeIDs end,
+		GetRecipeSchematic = function(rid)
+			schematics = schematics + 1
+			return { recipeID = rid, name = "Elixir", outputItemID = 1, reagentSlotSchematics = {} }
+		end,
+	}
+	local sns = { byID = {}, byName = {} }
+	local frames = LoadCapturingFrames("Discover.lua", sns)
+	local station = frames[2]
+
+	for _ = 1, 10 do station.OnEvent(station, "TRADE_SKILL_LIST_UPDATE") end
+	check("another profession's window reads no schematics", schematics, 0)
+
+	-- The station's own skill line is read, whatever its recipes turn out to be.
+	station.OnEvent(station, "TRADE_SKILL_CLOSE")
+	profession = { professionID = 2984 }
+	station.OnEvent(station, "TRADE_SKILL_SHOW")
+	check("the station's skill line is read", schematics, 3)
+
+	-- A profession ID that doesn't match, but a station recipe in the list: read.
+	-- Getting the skill line wrong must not stop the herb map being learned.
+	schematics = 0
+	station.OnEvent(station, "TRADE_SKILL_CLOSE")
+	profession = { professionID = 555 }
+	recipeIDs = { 9001, 1306802 }
+	station.OnEvent(station, "TRADE_SKILL_SHOW")
+	check("a station recipe in the list is read on its own", schematics, 2)
+
+	-- A client that won't say which profession is open: read, as it always was.
+	schematics = 0
+	station.OnEvent(station, "TRADE_SKILL_CLOSE")
+	profession = nil
+	recipeIDs = { 9001 }
+	station.OnEvent(station, "TRADE_SKILL_SHOW")
+	check("an unreadable profession is read as before", schematics, 1)
+
+	C_TradeSkillUI = nil
+end
+
+-- A stand-in for a Blizzard frame that counts every change made to it: a field
+-- written, or a texture or font string created on it. Parenting a frame of ours to
+-- it is allowed -- that is the pattern -- and so is hooksecurefunc.
+local blizzardWrites = 0
+local function BlizzardFrame(fields)
+	fields.CreateTexture = function() blizzardWrites = blizzardWrites + 1; return Widget() end
+	fields.CreateFontString = function() blizzardWrites = blizzardWrites + 1; return Widget() end
+	fields.IsShown = fields.IsShown or function() return true end
+	fields.IsVisible = fields.IsVisible or function() return true end
+	fields.GetFrameLevel = function() return 1 end
+	return setmetatable({}, {
+		__index = fields,
+		__newindex = function(t, k, v) blizzardWrites = blizzardWrites + 1; rawset(t, k, v) end,
+	})
+end
+
+print("\n-- Nothing of ours is written onto the crafting window --")
+do
+	RunTimers()
+	blizzardWrites = 0
+	local realHook = hooksecurefunc
+	hooksecurefunc = function(target, name, fn)
+		if type(target) == "string" then -- the global form: hooksecurefunc(name, fn)
+			local orig, hook = _G[target], name
+			_G[target] = function(...) orig(...); hook(...) end
+			return
+		end
+		local orig = target[name]
+		rawset(target, name, function(...) orig(...); fn(...) end)
+	end
+
+	local shownHooks = {}
+	local redDye = { key = "red", color = "red", kind = "dye", name = "Red Housing Dye" }
+	local recipeButton = BlizzardFrame({
+		GetElementData = function() return { data = { recipeInfo = { name = "Red Housing Dye" } } } end,
+	})
+	local flowerButton = BlizzardFrame({ GetItemID = function() return 700777 end })
+	local flyoutBox = BlizzardFrame({
+		GetFrames = function() return { flowerButton } end,
+		Update = function() end,
+	})
+	local walked = 0
+	local flyoutFrame = { IsShown = function() return true end, ScrollBox = flyoutBox }
+	EnumerateFrames = function(prev)
+		walked = walked + 1
+		if prev == nil then return flyoutFrame end
+		return nil
+	end
+	OpenProfessionsItemFlyout = function() end
+
+	ProfessionsFrame = BlizzardFrame({
+		IsShown = function() return true end,
+		HookScript = function(_, script, fn) shownHooks[script] = fn end,
+		CraftingPage = {
+			RecipeList = { ScrollBox = BlizzardFrame({
+				GetFrames = function() return { recipeButton } end,
+				Update = function() end,
+			}) },
+			SchematicForm = BlizzardFrame({
+				GetRecipeInfo = function() return { name = "Red Housing Dye" } end,
+				OutputText = Widget(),
+			}),
+		},
+	})
+
+	DyeingDownTheHouseDB.ui.markHerbs = true
+	local cns = {
+		byID = { [700777] = { key = "rose", kind = "herb" } },
+		byName = { ["red housing dye"] = redDye },
+		GetGoal = function() return 5 end,
+		GetTotal = function() return 0 end,
+		HERBS_PER_DYE = 10,
+		GetHerbCraftVerdictByID = function() return true end,
+	}
+	local waiter = LoadCapturingFrames("Crafting.lua", cns)[1]
+	waiter.OnEvent(waiter, "PLAYER_ENTERING_WORLD")
+	check("the window hooked", cns.craftingHooked, true)
+	cns.RefreshCraftingMarkers()
+
+	OpenProfessionsItemFlyout()
+	RunTimers()
+	check("the flower got its mark", cns.HasFlyoutMark ~= nil and cns.HasFlyoutMark(flowerButton), true)
+	check("not one field or region was put on their frames", blizzardWrites, 0)
+
+	print("\n-- The flower picker is found without walking every frame --")
+	-- Found by walking the first time, and remembered: every later open goes straight
+	-- to it. The walk is up to twelve thousand frames.
+	check("the first open walks to find it", walked > 0, true)
+	walked = 0
+	for _ = 1, 5 do OpenProfessionsItemFlyout(); RunTimers() end
+	check("later opens don't walk at all", walked, 0)
+
+	ProfessionsFrame, EnumerateFrames, OpenProfessionsItemFlyout = nil, nil, nil
+	hooksecurefunc = realHook
+end
+
+print("\n-- A row's numbers come without building the flower breakdown --")
+do
+	check("there is a counts-only reader", type(ns.GetColorCounts), "function")
+	local mismatched = 0
+	for _, color in ipairs(ns.COLORS) do
+		local rc = ns.GetRecipeStatus(color)
+		if rc and ns.GetColorCounts then
+			local owned, herbs, craftable = ns.GetColorCounts(color)
+			if owned ~= rc.owned or herbs ~= rc.ownedHerbs or craftable ~= rc.craftableNow then
+				mismatched = mismatched + 1
+			end
+		end
+	end
+	check("the counts agree with the full status for every color", mismatched, 0)
+
+	local realStatus, statusCalls = ns.GetRecipeStatus, 0
+	ns.GetRecipeStatus = function(...) statusCalls = statusCalls + 1; return realStatus(...) end
+	for _, mode in ipairs({ "craft", "craftherb", "short" }) do ns.SortDyes(ns.DYES, mode) end
+	check("sorting by them builds no recipe status", statusCalls, 0)
+	ns.GetRecipeStatus = realStatus
+end
+
+print("\n-- Login doesn't build a window nobody opened --")
+do
+	local builds, realBuild = 0, ns.BuildUI
+	ns.BuildUI = function() builds = builds + 1 end
+	DyeingDownTheHouseDB.ui.shown = false
+	Fire("PLAYER_LOGIN")
+	check("no window built at login", builds, 0)
+	ns.BuildUI = realBuild
+end
+
+print("\n-- The window: built on first open, drawn once per frame --")
+do
+	RunTimers()
+	UIParent, GameTooltip = Widget(), Widget()
+	GameTooltip_Hide = function() end
+	STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
+	local draws = 0
+	FauxScrollFrame_Update = function() draws = draws + 1 end
+	FauxScrollFrame_GetOffset = function() return 0 end
+	FauxScrollFrame_SetOffset = function() end
+	FauxScrollFrame_OnVerticalScroll = function(_, _, _, fn) fn() end
+	DyeingDownTheHouseDB.ui.collapsed = nil
+
+	local made = LoadCapturingFrames("UI.lua", ns)
+	check("loading the file builds nothing", #made, 0)
+
+	local before = widgetsMade
+	local built, realCreateFrame = {}, CreateFrame
+	CreateFrame = function(...)
+		local f = realCreateFrame(...)
+		built[#built + 1] = f
+		return f
+	end
+	ns.Show()
+	CreateFrame = realCreateFrame
+	check("opening builds it", widgetsMade - before > 100, true)
+	check("...and draws it straight away", draws, 1)
+
+	draws = 0
+	ns.SetSearch("re"); ns.Refresh(); ns.ClearFilters(); ns.Refresh()
+	check("four refreshes in one frame draw nothing yet", draws, 0)
+	RunTimers()
+	check("...then draw once", draws, 1)
+
+	local searchBox, header
+	for _, f in ipairs(built) do
+		if f.OnTextChanged then searchBox = f end
+		if f.sort and f.label and f.OnLeave then header = f end
+	end
+
+	draws = 0
+	searchBox:SetText("bl")
+	searchBox.OnTextChanged(searchBox)
+	RunTimers()
+	check("a keystroke in the search draws once", draws, 1)
+
+	draws = 0
+	header.OnLeave(header)
+	RunTimers()
+	check("mousing off a header redraws nothing", draws, 0)
+	ns.SetSearch("")
+	RunTimers()
+end
+
+print("\n-- The options page registers at login and builds on first open --")
+do
+	local panel, registered
+	Settings = {
+		RegisterCanvasLayoutCategory = function(frame, name)
+			panel = frame
+			return { GetID = function() return 1 end }
+		end,
+		RegisterAddOnCategory = function() registered = true end,
+		OpenToCategory = function() end,
+	}
+	local before = widgetsMade
+	local loginFrame = LoadCapturingFrames("Options.lua", ns)[1]
+	loginFrame.OnEvent(loginFrame, "PLAYER_LOGIN")
+	check("the category is registered at login", registered, true)
+	check("...with almost nothing built", widgetsMade - before < 5, true)
+
+	local atLogin = widgetsMade
+	panel.OnShow(panel)
+	check("opening the page builds it", widgetsMade - atLogin > 50, true)
+	local afterFirst = widgetsMade
+	panel.OnShow(panel)
+	check("opening it again builds nothing more", widgetsMade, afterFirst)
+	Settings = nil
 end
 
 print(("\n%d checks, %d failures"):format(checks, failures))

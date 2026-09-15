@@ -7,8 +7,9 @@ local ADDON, ns = ...
 --
 -- A custom canvas panel: column-visibility toggles and display options in tidy
 -- columns, plus two collapsible checklists (Dyes and Flowers) where everything is
--- on by default and the player unchecks what they don't want to see. Built once
--- at login, wrapped so a Settings-API change can never take the addon down.
+-- on by default and the player unchecks what they don't want to see. Registered at
+-- login and filled in the first time it is opened, wrapped so a Settings-API change
+-- can never take the addon down.
 --------------------------------------------------------------------------------
 
 local category, panel, panelTitle
@@ -195,16 +196,15 @@ local function BuildChecklist(content, items, isHidden, setHidden, setAll, swatc
 	return c, h
 end
 
-local function BuildPanel()
-	if panel then return end
-	if type(Settings) ~= "table"
-		or not (Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory) then
-		return
-	end
-
-	panel = CreateFrame("Frame")
-	panel:Hide()
-
+-- Everything on the page: some hundred and fifty checkboxes, radios and labels.
+-- Built the first time the page is actually opened rather than at login, which most
+-- sessions never do. The category itself still registers at login (BuildPanel,
+-- below), so the addon is listed under AddOns from the start.
+--
+-- This is a canvas category, not a vertical list, so none of the template and
+-- GetExtent machinery the playbook describes is involved: the settings window hands
+-- our frame its size and shows it, and whatever is inside is ours to lay out.
+local function BuildContents()
 	local scroll = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
 	scroll:SetPoint("TOPLEFT", 10, -10)
 	scroll:SetPoint("BOTTOMRIGHT", -28, 10)
@@ -415,8 +415,26 @@ local function BuildPanel()
 		s.header = btn
 	end
 	Relayout()
+end
 
+local function BuildPanel()
+	if panel then return end
+	if type(Settings) ~= "table"
+		or not (Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory) then
+		return
+	end
+
+	panel = CreateFrame("Frame")
+	panel:Hide()
+
+	local built = false
 	panel:SetScript("OnShow", function()
+		if not built then
+			built = true
+			-- Wrapped as the whole panel used to be at login: a Settings or template
+			-- change costs the page, never the addon.
+			pcall(BuildContents)
+		end
 		RefreshChecks()
 		RefreshPriceRadios()
 	end)

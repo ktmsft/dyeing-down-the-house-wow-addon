@@ -61,6 +61,36 @@ local function ShouldCraft(dye)
 end
 
 --------------------------------------------------------------------------------
+-- Our marks live on frames of OUR OWN
+--
+-- Every mark used to be a texture or font string created on Blizzard's frame and
+-- stored in a field on it (button.ddthMark, sf.ddthHaveNeed). Both of those are
+-- writes to someone else's widget, which is exactly the taint rule the playbook
+-- keeps relearning: a Blizzard handler that later reads that frame on a protected
+-- path is refused, and the report never names this addon.
+--
+-- So each mark gets a plain frame of ours, a child of theirs so it shows, hides,
+-- scrolls and clips with it, anchored with SetAllPoints (a read of their position,
+-- not a change to it). Which overlay belongs to which of their frames is kept here,
+-- keyed weakly, so nothing is ever stored on theirs. The list pools its buttons, so
+-- this makes at most one overlay per pooled button, once.
+--------------------------------------------------------------------------------
+
+local recipeMarks = setmetatable({}, { __mode = "k" })  -- recipe button -> overlay
+local detailLines = setmetatable({}, { __mode = "k" })  -- schematic form -> overlay
+local flyoutMarks = setmetatable({}, { __mode = "k" })  -- picker button -> overlay
+
+local function OverlayFor(store, host)
+	local overlay = store[host]
+	if not overlay then
+		overlay = CreateFrame("Frame", nil, host)
+		overlay:SetAllPoints(host)
+		store[host] = overlay
+	end
+	return overlay
+end
+
+--------------------------------------------------------------------------------
 -- The recipe list
 --------------------------------------------------------------------------------
 
@@ -72,16 +102,17 @@ local function DecorateButton(button)
 
 	-- Mark ONLY colours you want to make: a goal is set and you hold fewer than it.
 	if dye and ShouldCraft(dye) then
-		if not button.ddthMark then
-			local t = button:CreateTexture(nil, "OVERLAY")
+		local overlay = OverlayFor(recipeMarks, button)
+		if not overlay.mark then
+			local t = overlay:CreateTexture(nil, "OVERLAY")
 			t:SetSize(16, 16)
-			t:SetPoint("RIGHT", button, "RIGHT", -4, 0)
+			t:SetPoint("RIGHT", overlay, "RIGHT", -4, 0)
 			t:SetTexture("Interface\\GossipFrame\\AvailableQuestIcon") -- yellow "!" = make this
-			button.ddthMark = t
+			overlay.mark = t
 		end
-		button.ddthMark:Show()
-	elseif button.ddthMark then
-		button.ddthMark:Hide()
+		overlay:Show()
+	elseif recipeMarks[button] then
+		recipeMarks[button]:Hide()
 	end
 end
 
@@ -125,21 +156,22 @@ local function DecorateDetail()
 	local dye, sf = CurrentRecipeDye()
 	if not sf then return end
 
-	if not sf.ddthHaveNeed then
-		local fs = sf:CreateFontString(nil, "OVERLAY", "GameFontHighlightMedium")
+	local overlay = OverlayFor(detailLines, sf)
+	if not overlay.haveNeed then
+		local fs = overlay:CreateFontString(nil, "OVERLAY", "GameFontHighlightMedium")
 		if sf.OutputText then
 			fs:SetPoint("TOPLEFT", sf.OutputText, "BOTTOMLEFT", 0, -6)
 		else
-			fs:SetPoint("TOPLEFT", sf, "TOPLEFT", 60, -46)
+			fs:SetPoint("TOPLEFT", overlay, "TOPLEFT", 60, -46)
 		end
-		sf.ddthHaveNeed = fs
+		overlay.haveNeed = fs
 
-		local use = sf:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		local use = overlay:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 		use:SetPoint("TOPLEFT", fs, "BOTTOMLEFT", 0, -4)
 		use:SetJustifyH("LEFT")
-		sf.ddthUseFlower = use
+		overlay.useFlower = use
 	end
-	local fs, use = sf.ddthHaveNeed, sf.ddthUseFlower
+	local fs, use = overlay.haveNeed, overlay.useFlower
 
 	if not dye then fs:Hide(); use:Hide(); return end
 
@@ -203,8 +235,9 @@ end
 
 local function DecorateFlyoutButton(btn, color)
 	-- Respect the config toggle: if off, clear any mark and stop.
+	local existing = flyoutMarks[btn]
 	if not DyeingDownTheHouseDB.ui.markHerbs then
-		if btn.ddthVerdict then btn.ddthVerdict:Hide() end
+		if existing then existing:Hide() end
 		return
 	end
 	local ok, itemID = pcall(btn.GetItemID, btn)
@@ -215,17 +248,24 @@ local function DecorateFlyoutButton(btn, color)
 	if color and itemID then verdict = ns.GetHerbCraftVerdictByID(itemID, color) end
 
 	if verdict == nil then
-		if btn.ddthVerdict then btn.ddthVerdict:Hide() end
+		if existing then existing:Hide() end
 		return
 	end
-	if not btn.ddthVerdict then
-		local t = btn:CreateTexture(nil, "OVERLAY")
+	local overlay = OverlayFor(flyoutMarks, btn)
+	if not overlay.verdict then
+		local t = overlay:CreateTexture(nil, "OVERLAY")
 		t:SetSize(15, 15)
-		t:SetPoint("TOPRIGHT", btn, "TOPRIGHT", 2, 2)
-		btn.ddthVerdict = t
+		t:SetPoint("TOPRIGHT", overlay, "TOPRIGHT", 2, 2)
+		overlay.verdict = t
 	end
-	btn.ddthVerdict:SetTexture(verdict and CHECK_READY or CHECK_NOTREADY)
-	btn.ddthVerdict:Show()
+	overlay.verdict:SetTexture(verdict and CHECK_READY or CHECK_NOTREADY)
+	overlay:Show()
+end
+
+-- For `/dye probe flyout`, which used to look for the field on their button.
+function ns.HasFlyoutMark(btn)
+	local overlay = flyoutMarks[btn]
+	return overlay ~= nil and overlay:IsShown()
 end
 
 local function DecorateFlyout(sb)
@@ -273,7 +313,25 @@ local function LooksLikeFlowerPicker(frames)
 	return false
 end
 
+-- A picker we have already met, if one is up. The flyout is one reused frame, so
+-- after the first time this is nearly always the answer, and it saves walking every
+-- frame in the client -- up to twelve thousand of them -- on each open.
+local function DecorateKnownFlyout()
+	for sb in pairs(hookedFlyoutSB) do
+		local okShown, shown = pcall(sb.IsVisible, sb)
+		if okShown and shown then
+			local ok, frames = pcall(sb.GetFrames, sb)
+			if ok and type(frames) == "table" and #frames > 0 and LooksLikeFlowerPicker(frames) then
+				DecorateFlyout(sb)
+				return true
+			end
+		end
+	end
+	return false
+end
+
 local function FindAndDecorateFlyout()
+	if DecorateKnownFlyout() then return end
 	if type(EnumerateFrames) ~= "function" then return end
 	local fr, guard = EnumerateFrames(), 0
 	while fr and guard < 12000 do

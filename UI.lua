@@ -711,13 +711,15 @@ local function HeldCell(held, dyes)
 	return text, 0.45, 0.45, 0.45                          -- nothing
 end
 
-local function CellValue(key, dye, rc)
+-- `owned`, `herbs` and `craftable` are ns.GetColorCounts' three numbers, read once
+-- per row by the caller.
+local function CellValue(key, dye, owned, herbs, craftable)
 	if key == "owned" then
-		return ns.GetTotal(dye.key), 1, 1, 1
+		return owned, 1, 1, 1
 	elseif key == "flowers" then
-		return HeldCell(rc and rc.ownedHerbs or 0, rc and rc.craftableNow or 0)
+		return HeldCell(herbs, craftable)
 	elseif key == "makeable" then
-		local n = rc and rc.craftableNow or 0
+		local n = craftable
 		if n > 0 then return n, 0.5, 0.87, 0.5 end
 		return n, 0.45, 0.45, 0.45
 	elseif key == "value" then
@@ -743,17 +745,11 @@ local function CellValue(key, dye, rc)
 	end
 end
 
-function ns.Refresh()
-	-- Keep the dye station's markers in sync even when our window is hidden or
-	-- closed: a goal changed anywhere has to reach the station list, and this is
-	-- the only thing that calls it. Dropping this line when Refresh was rewritten
-	-- is why changing a goal stopped updating the station.
-	if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end
-	if not frame or not frame:IsShown() then return end
-	-- Collapsed to the title bar: don't touch the list (it re-shows the scroll frame,
-	-- which would spill the rows out below the short bar on any bag/loot refresh).
-	if DyeingDownTheHouseDB.ui.collapsed then return end
-
+-- The tab strip and the column headers: which tab is lit, which header carries the
+-- sort caret. Its own function because a header losing the mouse only needs its
+-- colour back, and that used to cost a redraw of the whole list.
+local function StyleHeaders()
+	if not frame then return end
 	local onDyeTab = (ns.GetTab() == "dye")
 	local sort, dir
 	if onDyeTab then sort, dir = ns.GetShadeSort() else sort, dir = ns.GetSort() end
@@ -790,6 +786,17 @@ function ns.Refresh()
 		end
 		h.fs:SetTextColor(on and ACCENT[1] or 0.75, on and ACCENT[2] or 0.75, on and ACCENT[3] or 0.75)
 	end
+end
+
+-- Draw the list as it stands. Called through ns.Refresh, which batches, except where
+-- the window is being opened and a frame of stale rows would show.
+local function Draw()
+	if not frame or not frame:IsShown() then return end
+	-- Collapsed to the title bar: don't touch the list (it re-shows the scroll frame,
+	-- which would spill the rows out below the short bar on any bag/loot refresh).
+	if DyeingDownTheHouseDB.ui.collapsed then return end
+
+	StyleHeaders()
 
 	-- An old client gets one line saying so and nothing else. Drawing the normal
 	-- list would show nine colors it has never heard of with zero of each, which
@@ -945,10 +952,13 @@ function ns.Refresh()
 			row.name:SetText(e.color:gsub("^%l", string.upper))
 			row.name:SetTextColor(1, 0.82, 0)
 
-			local rc = ns.GetRecipeStatus(dye.key)
+			-- Three numbers, not the full recipe status: that builds a table per flower,
+			-- and this runs for every row on every refresh.
+			local owned, herbs, craftable = ns.GetColorCounts(dye.color)
+			local gval = ns.GetGoal(dye.key)
 			for key, fs in pairs(row.cells) do
 				if layout[key] then
-					local text, r, g, b = CellValue(key, dye, rc)
+					local text, r, g, b = CellValue(key, dye, owned, herbs, craftable)
 					if text ~= nil then fs:SetText(text); fs:SetTextColor(r, g, b) end
 				end
 			end
@@ -956,7 +966,6 @@ function ns.Refresh()
 			-- the colours you have actually asked for are the only ones with anything
 			-- in this column.
 			if layout.goal then
-				local gval = ns.GetGoal(dye.key)
 				row.cells.goal:SetText(gval > 0 and tostring(gval) or "")
 				row.cells.goal:SetTextColor(0.95, 0.82, 0.35)
 			end
@@ -964,7 +973,7 @@ function ns.Refresh()
 			-- deliberately don't count: when stock-in-hand did count, a color could show
 			-- a green tick here while its own Makeable column was still telling you to
 			-- go and make some. One definition, and Makeable answers the other question.
-			local covered = layout.goal and rc and rc.goal > 0 and rc.owned >= rc.goal
+			local covered = layout.goal and gval > 0 and owned >= gval
 			row.goalCheck:SetShown(covered and true or false)
 			if GameTooltip:IsOwned(row) then ShowColorTooltip(row) end
 			row:Show()
@@ -1111,6 +1120,39 @@ function ns.Refresh()
 	end
 end
 
+-- One redraw per frame, however many things asked for one.
+--
+-- A single action used to redraw several times over: a keystroke in the search box
+-- set the search (a refresh) and then refreshed again, Clear managed four, and a tab
+-- or header click two. Every caller now just marks the list dirty, and it is drawn
+-- once on the next frame -- soon enough that typing doesn't feel it.
+local drawQueued, markersQueued = false, false
+
+local function Flush()
+	drawQueued = false
+	-- Keep the dye station's markers in sync even when our window is hidden or
+	-- closed: a goal changed anywhere has to reach the station list, and this is
+	-- the only thing that calls it. Dropping this line when Refresh was rewritten
+	-- is why changing a goal stopped updating the station.
+	if markersQueued then
+		markersQueued = false
+		if ns.RefreshCraftingMarkers then ns.RefreshCraftingMarkers() end
+	end
+	Draw()
+end
+
+-- Just the list, for scrolling, which has nothing to say to the station.
+local function QueueDraw()
+	if drawQueued then return end
+	drawQueued = true
+	C_Timer.After(0, Flush)
+end
+
+function ns.Refresh()
+	markersQueued = true
+	QueueDraw()
+end
+
 --------------------------------------------------------------------------------
 -- Headers
 --------------------------------------------------------------------------------
@@ -1149,7 +1191,8 @@ local function MakeHeader(key, label, sortMode)
 			GameTooltip:Show()
 		end
 	end)
-	btn:SetScript("OnLeave", function() GameTooltip_Hide(); ns.Refresh() end)
+	-- Only the header's own colour needs putting back, not the whole list.
+	btn:SetScript("OnLeave", function() GameTooltip_Hide(); StyleHeaders() end)
 	headers[key] = btn
 	return btn
 end
@@ -1193,7 +1236,7 @@ function ns.BuildUI()
 		if ui.collapsed then return end -- don't persist the title-bar height
 		ui.width, ui.height = self:GetWidth(), self:GetHeight()
 		Layout()
-		ns.Refresh()
+		Draw() -- straight after Layout, which has just hidden every row
 	end)
 	frame:Hide()
 
@@ -1370,7 +1413,7 @@ function ns.BuildUI()
 	scroll:SetPoint("TOPLEFT", 10, -TOP_INSET)
 	scroll:SetPoint("BOTTOMRIGHT", -28, BOT_INSET)
 	scroll:SetScript("OnVerticalScroll", function(self, offset)
-		FauxScrollFrame_OnVerticalScroll(self, offset, ROW_H, ns.Refresh)
+		FauxScrollFrame_OnVerticalScroll(self, offset, ROW_H, QueueDraw)
 	end)
 	scrollBar = _G["DyeingDownTheHouseScrollScrollBar"] or scroll.ScrollBar
 
@@ -1391,7 +1434,7 @@ function ns.BuildUI()
 		local ui = DyeingDownTheHouseDB.ui
 		ui.width, ui.height = frame:GetWidth(), frame:GetHeight()
 		Layout()
-		ns.Refresh()
+		Draw() -- straight after Layout, which has just hidden every row
 	end)
 
 	-- Everything hidden when collapsed to the title bar (headers handled separately).
@@ -1433,7 +1476,7 @@ function ns.SetCollapsed(collapsed)
 	else
 		frame:SetHeight(DyeingDownTheHouseDB.ui.height or 460)
 		Layout()
-		ns.Refresh()
+		Draw() -- straight after Layout, which has just hidden every row
 	end
 end
 
@@ -1463,7 +1506,9 @@ function ns.Show()
 	DyeingDownTheHouseDB.ui.shown = true
 	frame:Show()
 	Layout()
-	ns.Refresh()
+	-- Drawn now rather than next frame: Layout has just hidden every row, and a
+	-- window opening onto a blank frame first is a flicker.
+	Draw()
 end
 
 function ns.Hide()

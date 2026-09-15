@@ -998,6 +998,21 @@ local function ProbeStation()
 	end
 	W("")
 
+	-- Discover.lua only reads recipes in a window it believes is the station, judged
+	-- on these. If the station ever stops teaching the flower list, check here first:
+	-- a skill line that no longer reads 2984 AND no recipe matching is the one case
+	-- that gate gets wrong.
+	W("-- which profession is this window? --")
+	local tsu = _G.C_TradeSkillUI
+	for _, name in ipairs({ "GetChildProfessionInfo", "GetBaseProfessionInfo" }) do
+		local info = tsu and type(tsu[name]) == "function" and Try(tsu[name])
+		W("  %-24s professionID %s  (%s)", name,
+			tostring(type(info) == "table" and info.professionID),
+			tostring(type(info) == "table" and info.professionName))
+	end
+	W("  ns.LooksLikeStation(): %s", tostring(ns.LooksLikeStation and Try(ns.LooksLikeStation)))
+	W("")
+
 	W("-- did Crafting.lua manage to attach? --")
 	W("  ns.craftingHooked: %s", tostring(ns.craftingHooked))
 	W("  (false with the window open means the paths above are wrong; true with")
@@ -1544,7 +1559,10 @@ local function ProbeFlyout()
 						end
 
 						-- Did we already put a mark on it?
-						W("      our mark: %s", Get(btn, "ddthVerdict") and "attached" or "none")
+						-- Asked of Crafting.lua: the mark is our own overlay now, not a field
+						-- on their button.
+						local marked = ns.HasFlyoutMark and Try(ns.HasFlyoutMark, btn)
+						W("      our mark: %s", marked and "attached" or "none")
 					end
 				end
 			end
