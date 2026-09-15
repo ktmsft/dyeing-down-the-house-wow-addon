@@ -2,6 +2,21 @@
 
 All notable changes to Dyeing Down The House are recorded here.
 
+## [2.0.2] — 2026-09-15
+
+A lighter build. Nothing to do after updating.
+
+### Changed
+
+- **Faster logins and logouts.** Clears old diagnostic data some profiles still
+  carried from before release.
+- **Other profession windows cost nothing.** Only the Dye Station's window is read,
+  and its marks sit on the addon's own frames rather than Blizzard's.
+- **Built when you open it.** The window and the options page are made the first
+  time you open them, and the list redraws once per change.
+- **Less work in the background:** on bag changes, during auction scans, and while
+  the housing editor is shut.
+
 ## [2.0.1] — 2026-08-11
 
 Dyes are back on the auction house. 12.1 undid the Warband-binding from the 4

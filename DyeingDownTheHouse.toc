@@ -2,7 +2,7 @@
 ## Title: Dyeing Down The House
 ## Notes: An account-wide tally of every housing dye across your bags, bank and Warband bank — with goals, flowers and what each dye costs to make. Color your world.
 ## Author: KTM (abitofmoss)
-## Version: 2.0.1
+## Version: 2.0.2
 ## X-License: All Rights Reserved
 ## Category: Professions
 ## IconTexture: 7449428
