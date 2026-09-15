@@ -330,7 +330,20 @@ local function Hook()
 		if type(sf.Refresh) == "function" then hooksecurefunc(sf, "Refresh", DecorateDetail) end
 	end
 	-- Our own refresh (goal/count changes) updates both the list and the detail.
-	ns.RefreshCraftingMarkers = function() DecorateList(); DecorateDetail() end
+	--
+	-- Only while the window is open. Once hooked, this used to run on every refresh
+	-- for the rest of the session -- every bag update, every step of a price scan --
+	-- redecorating a window nobody could see, and asking the station for its recipes
+	-- again each time. Opening it redecorates through the hooks above, and the OnShow
+	-- below catches a goal changed while it was shut.
+	local function RefreshNow() DecorateList(); DecorateDetail() end
+	ns.RefreshCraftingMarkers = function()
+		if pf:IsShown() then RefreshNow() end
+	end
+	if type(pf.HookScript) == "function" then
+		-- A frame late, so the list has laid itself out before it is read.
+		pf:HookScript("OnShow", function() C_Timer.After(0, RefreshNow) end)
+	end
 	ns.craftingHooked = true
 	DecorateList()
 	DecorateDetail()

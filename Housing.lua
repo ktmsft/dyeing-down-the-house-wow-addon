@@ -562,12 +562,38 @@ local function UpdatePanel()
 	box:Show()
 end
 
--- One throttled ticker. The first line bails almost for free whenever the house
--- editor isn't even loaded, so leaving it running costs nothing off-house.
+-- One throttled ticker, running only while the house editor is open.
+--
+-- It used to run for the rest of the session once housing had loaded at all, on
+-- the reasoning that it bailed for free off-house. It only bailed for free until
+-- the editor had been opened once: from then on the frame exists, so every 0.2s,
+-- anywhere in the world, it walked the pane paths and asked the housing API about
+-- a selected decor that wasn't there. Now it stops itself when the editor is shut
+-- and a hook on the editor's OnShow starts it again.
 local driver = CreateFrame("Frame")
 local acc = 0
-local function Tick(_, elapsed)
-	if not _G.HouseEditorFrame then return end
+local watched -- the editor frame whose OnShow is hooked, so the hook goes on once
+local Tick
+
+local function Watch(editor)
+	if watched == editor or type(editor.HookScript) ~= "function" then return end
+	watched = editor
+	editor:HookScript("OnShow", function()
+		acc = THROTTLE -- draw on the first frame rather than a beat late
+		driver:SetScript("OnUpdate", Tick)
+	end)
+end
+
+function Tick(_, elapsed)
+	local editor = _G.HouseEditorFrame
+	if not editor then return end
+	Watch(editor)
+	if watched == editor and not editor:IsShown() then
+		-- Hidden too, so reopening on another decor can't flash this one's rows.
+		if box then box:Hide() end
+		driver:SetScript("OnUpdate", nil)
+		return
+	end
 	acc = acc + elapsed
 	if acc < THROTTLE then return end
 	acc = 0

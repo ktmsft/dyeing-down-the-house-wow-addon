@@ -159,8 +159,11 @@ function CreateFrame()
 	return {
 		RegisterEvent = function() end,
 		UnregisterEvent = function() end,
-		SetScript = function(_, script, fn)
+		SetScript = function(self, script, fn)
 			if script == "OnEvent" then handlers[#handlers + 1] = fn end
+			-- Kept on the frame too, so a test can see whether an OnUpdate is still
+			-- set and drive a frame's handlers without firing at every other frame.
+			self[script] = fn
 		end,
 	}
 end
@@ -449,6 +452,27 @@ check("white dye now counts", ns.GetTotal("white"), 7)
 check("learned id recorded for next session", DyeingDownTheHouseDB.learned.white, 900004)
 BAGS[4] = nil
 Fire("BAG_UPDATE_DELAYED"); RunTimers()
+
+print("\n-- Once every item has an ID, a bag scan stops asking for names --")
+-- The name match can only ever find an entry with no ID. With none left it was a
+-- GetItemInfo for every other item in the bags, on every bag update.
+do
+	local lookups, realGetItemInfo = 0, C_Item.GetItemInfo
+	C_Item.GetItemInfo = function(...) lookups = lookups + 1; return realGetItemInfo(...) end
+	BAGS[4] = { [1] = { 6948, 1 }, [2] = { 900999, 3 } } -- nothing we track
+	Fire("BAG_UPDATE_DELAYED"); RunTimers()
+	check("no name lookups with every ID known", lookups, 0)
+
+	ns.byKey.white.id = nil -- one entry unknown again
+	Fire("BAG_UPDATE_DELAYED"); RunTimers()
+	check("...but they come back while one is missing", lookups > 0, true)
+	check("...and the collision item still doesn't count", ns.GetTotal("red"), 465)
+
+	ns.byKey.white.id = 900004
+	C_Item.GetItemInfo = realGetItemInfo
+	BAGS[4] = nil
+	Fire("BAG_UPDATE_DELAYED"); RunTimers()
+end
 
 print("\n-- Goals --")
 ns.SetGoal("red", 500)
@@ -1785,6 +1809,46 @@ Fire("ADDON_LOADED", "DyeingDownTheHouse")
 check("its shade goals survive untouched", DyeingDownTheHouseDB.goals["alliance blue"], 12)
 check("its unassigned goals survive too", DyeingDownTheHouseDB.unassigned.red, 3)
 
+print("\n-- Old diagnostic dumps are dropped from the profile --")
+-- Pre-release builds wrote probe output straight into saved variables, and one real
+-- profile still carried ~870 KB of it: parsed at every login, rewritten at every
+-- logout. Nothing reads it, so it goes -- on an old client as well, since it is not
+-- part of what 1.3.0 would read back.
+do
+	local profileBefore = DyeingDownTheHouseDB
+	local function Stuffed()
+		return {
+			version = 5, goals = { ["alliance blue"] = 6 }, ui = {},
+			prices = { rose = { copper = 400, seen = 1, source = "ah" } },
+			craftProbe = { runs = { {} } }, recipeDump = { recipes = { {} } },
+			housingProbe = { captures = {} }, ahProbe = { items = {} },
+			itemNames = { [900101] = "Rose" }, harvest = { {} },
+		}
+	end
+
+	DyeingDownTheHouseDB = Stuffed()
+	Fire("ADDON_LOADED", "DyeingDownTheHouse")
+	local cleaned = DyeingDownTheHouseDB
+	local left = 0
+	for _, key in ipairs({ "craftProbe", "recipeDump", "housingProbe", "ahProbe", "itemNames", "harvest" }) do
+		if cleaned[key] ~= nil then left = left + 1 end
+	end
+	check("every probe dump is gone", left, 0)
+	check("the player's goals are kept", cleaned.goals["alliance blue"], 6)
+	check("prices are kept", cleaned.prices.rose.copper, 400)
+
+	local buildInfo = GetBuildInfo
+	function GetBuildInfo() return "12.0.7", "68974", "Aug 2026", 120007 end
+	DyeingDownTheHouseDB = Stuffed()
+	Fire("ADDON_LOADED", "DyeingDownTheHouse")
+	check("an unmigrated old client drops them too", DyeingDownTheHouseDB.craftProbe, nil)
+	GetBuildInfo = buildInfo
+
+	-- Put back what the tests below were built on.
+	DyeingDownTheHouseDB = profileBefore
+	Fire("ADDON_LOADED", "DyeingDownTheHouse")
+end
+
 --------------------------------------------------------------------------------
 -- Discovery: reading the dyes out of C_DyeColor
 --
@@ -2055,6 +2119,123 @@ check("...leaving the map as it was", #ns.herbsByColor.blue, 1)
 C_TradeSkillUI = nil
 local nok2 = ns.LearnHerbsFromStation()
 check("no C_TradeSkillUI at all is survivable", nok2, false)
+
+--------------------------------------------------------------------------------
+-- Idle cost
+--
+-- Each of these loads a fresh copy of one file into its own namespace and drives
+-- its frames directly, so nothing here fires at the frames the rest of the suite
+-- built. They guard work that used to run when there was nothing to do.
+--------------------------------------------------------------------------------
+
+-- Every frame a file creates, in order, so a test can reach its handlers.
+local function LoadCapturingFrames(file, fileNS)
+	local made, realCreateFrame = {}, CreateFrame
+	CreateFrame = function(...)
+		local f = realCreateFrame(...)
+		made[#made + 1] = f
+		return f
+	end
+	local ok, err = pcall(function() assert(loadfile(DIR .. file))("DyeingDownTheHouse", fileNS) end)
+	CreateFrame = realCreateFrame
+	assert(ok, err)
+	return made
+end
+
+print("\n-- A burst of item-info events buys one discovery pass, not one each --")
+do
+	RunTimers()
+	local dns = {}
+	local driver = LoadCapturingFrames("Discover.lua", dns)[1]
+	local passes = 0
+	dns.DiscoverDyes = function() passes = passes + 1; return true, { pending = 1 } end
+
+	for _ = 1, 300 do driver.OnEvent(driver, "GET_ITEM_INFO_RECEIVED", 12345) end
+	check("300 events and no pass yet", passes, 0)
+	RunTimers()
+	check("...then one pass for the lot", passes, 1)
+
+	for _ = 1, 20 do driver.OnEvent(driver, "GET_ITEM_INFO_RECEIVED", 12345); RunTimers() end
+	check("the retry budget still runs out", passes, 8)
+end
+
+print("\n-- The housing ticker only runs while the editor is open --")
+do
+	local hooks = 0
+	HouseEditorFrame = {
+		shown = false,
+		IsShown = function(self) return self.shown end,
+		HookScript = function(self, script, fn) hooks = hooks + 1; self[script] = fn end,
+	}
+	local driver = LoadCapturingFrames("Housing.lua", {})[1]
+	check("the editor existing at load starts it", driver.OnUpdate ~= nil, true)
+
+	driver.OnUpdate(driver, 0.05)
+	check("an editor that is shut stops it", driver.OnUpdate, nil)
+
+	HouseEditorFrame.shown = true
+	HouseEditorFrame.OnShow()
+	check("opening the editor starts it again", driver.OnUpdate ~= nil, true)
+	for _ = 1, 10 do driver.OnUpdate(driver, 0.05) end
+	check("...and it keeps running while open", driver.OnUpdate ~= nil, true)
+	check("the OnShow hook went on once", hooks, 1)
+
+	HouseEditorFrame.shown = false
+	driver.OnUpdate(driver, 0.05)
+	check("shutting it stops it again", driver.OnUpdate, nil)
+	HouseEditorFrame = nil
+end
+
+print("\n-- Station markers are only redrawn while the window is open --")
+do
+	RunTimers()
+	local reads = 0
+	local realHook = hooksecurefunc
+	hooksecurefunc = function(target, name, fn)
+		if type(target) ~= "table" then return end
+		local orig = target[name]
+		target[name] = function(...) orig(...); fn(...) end
+	end
+	local function Region()
+		return { SetPoint = function() end, SetJustifyH = function() end,
+			Hide = function() end, Show = function() end }
+	end
+	ProfessionsFrame = {
+		shown = false,
+		IsShown = function(self) return self.shown end,
+		HookScript = function(self, script, fn) self[script] = fn end,
+		CraftingPage = {
+			RecipeList = { ScrollBox = {
+				GetFrames = function() reads = reads + 1; return {} end,
+				Update = function() end,
+			} },
+			SchematicForm = {
+				GetRecipeInfo = function() return nil end,
+				CreateFontString = function() return Region() end,
+			},
+		},
+	}
+	local cns = { byID = {}, byName = {} }
+	local waiter = LoadCapturingFrames("Crafting.lua", cns)[1]
+	waiter.OnEvent(waiter, "PLAYER_ENTERING_WORLD")
+	check("it hooks the window", cns.craftingHooked, true)
+
+	reads = 0
+	cns.RefreshCraftingMarkers()
+	check("a refresh with the window shut reads nothing", reads, 0)
+
+	ProfessionsFrame.shown = true
+	cns.RefreshCraftingMarkers()
+	check("a refresh with it open redraws", reads, 1)
+
+	reads = 0
+	ProfessionsFrame.OnShow()
+	RunTimers()
+	check("opening it redraws once it has laid out", reads, 1)
+
+	ProfessionsFrame = nil
+	hooksecurefunc = realHook
+end
 
 print(("\n%d checks, %d failures"):format(checks, failures))
 os.exit(failures == 0 and 0 or 1)

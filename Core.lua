@@ -491,6 +491,25 @@ local function Migrate(db)
 	db.version = DB_VERSION
 end
 
+-- Diagnostic dumps that builds from before the first release wrote straight into
+-- the profile: the crafting window, every recipe, the house dye panel and raw
+-- auction listings, plus the old /ddth harvest output. No released version has
+-- written or read any of them, and nothing ever cleared them, so a profile that
+-- ran those builds still carries close to a megabyte of it -- parsed at every
+-- login and written back out at every logout and reload, for nothing.
+--
+-- None of it is a setting or anything the player made, so it goes. Cleared on
+-- every load and on any client, not behind a version gate or the migration: it is
+-- a handful of nil assignments once it's gone, and a 12.0.7 profile carries the
+-- same dead weight. Probes today print to a window and keep nothing (Probe.lua).
+local STALE_DIAGNOSTIC_KEYS = {
+	"craftProbe", "recipeDump", "housingProbe", "ahProbe", "itemNames", "harvest",
+}
+
+local function DropStaleDiagnostics(db)
+	for _, key in ipairs(STALE_DIAGNOSTIC_KEYS) do db[key] = nil end
+end
+
 local charKey
 
 --------------------------------------------------------------------------------
@@ -534,11 +553,24 @@ end
 
 local bankOpen = false
 
-local function ResolveEntry(info)
+-- Is any entry still waiting on its item ID? Only those can be found by name, so
+-- once every one is known (normally from the first second after login, when
+-- Discover.lua has run) the name lookup below can never match and is skipped.
+-- It matters because it runs for every OTHER item in the bags: a GetItemInfo and a
+-- lowercase copy per slot, on every bag update, and a thousand of them at the bank.
+local function AnyEntryNeedsID()
+	for _, entry in ipairs(ns.ITEMS) do
+		if entry.name and not entry.id then return true end
+	end
+	return false
+end
+
+local function ResolveEntry(info, matchNames)
 	if not info then return nil end
 
 	local entry = info.itemID and ns.byID[info.itemID]
 	if entry then return entry end
+	if not matchNames then return nil end
 
 	-- Fall back to matching on name, and remember the ID once we see it, so the
 	-- addon still works if an ID in Data.lua is wrong or Blizzard adds an item in a
@@ -566,11 +598,12 @@ end
 
 local function ScanGroup(ids)
 	local counts = {}
+	local matchNames = AnyEntryNeedsID()
 	for _, bag in ipairs(ids) do
 		local slots = C_Container.GetContainerNumSlots(bag) or 0
 		for slot = 1, slots do
 			local info = C_Container.GetContainerItemInfo(bag, slot)
-			local entry = ResolveEntry(info)
+			local entry = ResolveEntry(info, matchNames)
 			if entry then
 				counts[entry.key] = (counts[entry.key] or 0) + (info.stackCount or 1)
 			end
@@ -621,14 +654,15 @@ end
 local function LiveReachableCount(itemID)
 	if not (C_Item and C_Item.GetItemCount) then return nil end
 
-	for _, args in ipairs({
-		{ itemID, true, false, true, true },  -- ..., includeReagentBank, includeAccountBank
-		{ itemID, true, false, true },
-		{ itemID, true },
-	}) do
-		local ok, count = pcall(C_Item.GetItemCount, unpack(args))
-		if ok and type(count) == "number" then return count end
-	end
+	-- Each signature tried in turn, written out rather than looped over a table of
+	-- argument lists: this runs for every item on every bag update, and the loop
+	-- built four throwaway tables per item each time.
+	local ok, count = pcall(C_Item.GetItemCount, itemID, true, false, true, true) -- ..., includeReagentBank, includeAccountBank
+	if ok and type(count) == "number" then return count end
+	ok, count = pcall(C_Item.GetItemCount, itemID, true, false, true)
+	if ok and type(count) == "number" then return count end
+	ok, count = pcall(C_Item.GetItemCount, itemID, true)
+	if ok and type(count) == "number" then return count end
 
 	return nil
 end
@@ -789,12 +823,23 @@ end
 -- and bank, plus the shared Warband bank counted exactly once. The Warband figure
 -- is added once, outside the character loop, and is always our own — never
 -- DataStore's — which keeps it from being multiplied by the roster size.
+--
+-- The same walk as EachCharacter, written out: this is called for every flower of
+-- every colour on each window refresh, and the callback form built a closure per
+-- call.
 function ns.GetTotal(key)
 	local total = (DyeingDownTheHouseDB.warband[key]) or 0
-	EachCharacter(function(_, char)
+	local chars = DyeingDownTheHouseDB.chars
+	for _, char in pairs(chars) do
 		total = total + ((char.bags and char.bags[key]) or 0)
 		              + ((char.bank and char.bank[key]) or 0)
-	end)
+	end
+	for ck, char in pairs(borrowed) do
+		if not chars[ck] then
+			total = total + ((char.bags and char.bags[key]) or 0)
+			              + ((char.bank and char.bank[key]) or 0)
+		end
+	end
 	return total
 end
 
@@ -2316,6 +2361,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 		if isDev then DyeingDownTheHouseDB = DyeingDownTheHouseDevDB end
 		DyeingDownTheHouseDB = DyeingDownTheHouseDB or {}
 		ApplyDefaults(DyeingDownTheHouseDB, defaults)
+		DropStaleDiagnostics(DyeingDownTheHouseDB)
 		-- Defaults are additive and harmless on any client; the MIGRATION is the
 		-- one-way part, so it is the part an old client must not run. Skipping it
 		-- leaves the profile exactly as 1.3.0 left it, still readable by 1.3.0.

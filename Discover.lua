@@ -627,13 +627,38 @@ end
 
 local driver = CreateFrame("Frame")
 
+-- GET_ITEM_INFO_RECEIVED fires for EVERY item the client caches, not just ours,
+-- and at login that is hundreds in a burst. Each one used to run a whole pass
+-- (every shade, a lookup rebuild and a window refresh) and spend a retry, so the
+-- whole budget could be gone inside one frame, before our dye names had arrived.
+-- A burst now buys one pass, a moment after it starts.
+local RETRY_DELAY = 0.5
+local listening = true
+local queued = false
+
+local function StopListening()
+	listening = false
+	driver:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
+end
+
 local function Attempt()
 	local ok, result = ns.DiscoverDyes()
 	if not ok then return end
 	if type(result) == "table" and (result.pending or 0) == 0 then
-		driver:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
+		StopListening()
 	end
 	if ns.Refresh then ns.Refresh() end
+end
+
+local function Retry()
+	queued = false
+	if not listening then return end
+	retries = retries + 1
+	if retries > MAX_RETRIES then
+		StopListening()
+		return
+	end
+	pcall(Attempt)
 end
 
 driver:RegisterEvent("PLAYER_LOGIN")
@@ -645,13 +670,9 @@ driver:SetScript("OnEvent", function(_, event)
 		-- (ADDON_LOADED always lands first).
 		pcall(ns.ApplyLearnedHerbs)
 		pcall(Attempt)
-	else
-		retries = retries + 1
-		if retries > MAX_RETRIES then
-			driver:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
-			return
-		end
-		pcall(Attempt)
+	elseif listening and not queued then
+		queued = true
+		C_Timer.After(RETRY_DELAY, Retry)
 	end
 end)
 
